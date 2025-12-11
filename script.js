@@ -1,14 +1,14 @@
 // 面接対策アプリ - メインロジック
-// 既存の機能・ロジックを維持したまま、モバイルUI最適化を行うために分離
+// セキュリティ対応版: APIキーを削除し、Vercel Serverless Functions経由に変更
 
 // ==========================================
 // ▼▼▼ 設定エリア ▼▼▼
 
-// 1. Gemini APIキー
-const GEMINI_API_KEY = "AIzaSyC9iGSuARFktehNl-eh7WfbKRZKCozEEoU";
+// 1. Gemini APIキー (削除済み: サーバー側で管理)
+// const GEMINI_API_KEY = "削除"; 
 
-// 2. AIモデル名 (gemini-2.5-flash)
-const AI_MODEL_NAME = "gemini-2.5-flash";
+// 2. AIモデル名 (サーバー側で設定)
+// const AI_MODEL_NAME = "gemini-2.5-flash";
 
 // 3. Google Apps Script URL (最新版)
 const GAS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwCCfT37DBDDbzCyflow2bNcJV4q4GGLp9JGBu3ab72CtkyPWAk6zn5Zu6jRHlHX2ZCvA/exec";
@@ -163,12 +163,12 @@ function renderHeader() {
                     </div>
                 </div>
                 <div class="flex items-center gap-2 w-full sm:w-auto justify-end">
-                     <button onclick="handleSaveImage()" class="neo-btn flex-1 sm:flex-none flex items-center justify-center gap-2 text-sm font-bold text-slate-700 px-3 py-2.5 cursor-pointer">
-                       ${ICONS.Download} スクショ保存
-                     </button>
-                     <button id="sendBtn" onclick="openConfirmModal('現在のフィードバックをスプレッドシートに送信しますか？\\n（送信後、データはリセットされ、履歴に保存されます）', 'send')" class="neo-btn-primary flex-1 sm:flex-none flex items-center justify-center gap-2 text-sm font-bold px-4 py-2.5 rounded-xl cursor-pointer">
-                       ${state.sending ? ICONS.Loader2 : ICONS.Send} ${state.sending ? '送信中...' : 'シートへ送信'}
-                     </button>
+                      <button onclick="handleSaveImage()" class="neo-btn flex-1 sm:flex-none flex items-center justify-center gap-2 text-sm font-bold text-slate-700 px-3 py-2.5 cursor-pointer">
+                        ${ICONS.Download} スクショ保存
+                      </button>
+                      <button id="sendBtn" onclick="openConfirmModal('現在のフィードバックをスプレッドシートに送信しますか？\\n（送信後、データはリセットされ、履歴に保存されます）', 'send')" class="neo-btn-primary flex-1 sm:flex-none flex items-center justify-center gap-2 text-sm font-bold px-4 py-2.5 rounded-xl cursor-pointer">
+                        ${state.sending ? ICONS.Loader2 : ICONS.Send} ${state.sending ? '送信中...' : 'シートへ送信'}
+                      </button>
                 </div>
             </div>
             ${state.interviewerName ? `
@@ -844,7 +844,7 @@ window.closeBulkAnswerModal = () => {
 };
 
 window.runAiAnswerGeneration = async () => {
-    if (!GEMINI_API_KEY) { alert("APIキーが設定されていません"); return; }
+    // APIキーチェック削除（サーバー側で処理）
 
     const qNo = state.aiAnswerModal.qNo;
     const questionText = state.aiAnswerModal.questionText;
@@ -874,13 +874,19 @@ window.runAiAnswerGeneration = async () => {
 ・具体例：(要点のみ)
 ・まとめ：(要点のみ)`;
 
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${AI_MODEL_NAME}:generateContent?key=${GEMINI_API_KEY}`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+        // Vercel Serverless Function経由で呼び出し
+        const response = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt: prompt })
         });
 
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || 'Server Error');
+        }
+
         const data = await response.json();
-        if (data.error) throw new Error(data.error.message);
         const answerText = data.candidates[0].content.parts[0].text;
 
         saveAnswer(questionText, answerText);
@@ -952,17 +958,27 @@ window.closeAiModal = () => { state.aiModalOpen = false; renderApp(); };
 window.runAiGeneration = async () => {
     const input = document.getElementById('ai-input').value;
     state.aiInput = input;
-    if (!GEMINI_API_KEY) { state.aiError = "APIキーが設定されていません。コードを確認してください。"; renderApp(); return; }
+    // APIキーチェック削除（サーバー側で処理）
+    
     if (!input) { state.aiError = "キーワードを入力してください。"; renderApp(); return; }
     state.aiLoading = true; renderApp();
     try {
         const prompt = `あなたはトヨタシステムズの面接官です。ユーザー入力「${input}」を元に、最適なカテゴリ(1-6)を選択し、JSON形式 {"categoryId": number, "questionText": "質問文", "intent": "意図", "important": boolean} で返してください。Markdown不要。`;
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${AI_MODEL_NAME}:generateContent?key=${GEMINI_API_KEY}`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+        
+        // Vercel Serverless Function経由で呼び出し
+        const response = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt: prompt })
         });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || 'Server Error');
+        }
+
         const data = await response.json();
-        if (data.error) throw new Error(data.error.message);
+        
         const text = data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '').trim();
         const result = JSON.parse(text);
         state.categories = state.categories.map(cat => { if (cat.id === result.categoryId) { const newNo = `${cat.id}-${cat.questions.length + 1}`; return { ...cat, questions: [...cat.questions, { no: newNo, q: result.questionText, intent: result.intent, important: result.important }] }; } return cat; });
@@ -970,10 +986,10 @@ window.runAiGeneration = async () => {
         localStorage.setItem('interview_categories', JSON.stringify(state.categories));
         saveSettings();
 
-        alert(`質問を追加しました！\n(モデル: ${AI_MODEL_NAME})`);
+        alert(`質問を追加しました！`);
         state.aiModalOpen = false;
         state.aiInput = "";
-    } catch (e) { state.aiError = `生成エラー (${AI_MODEL_NAME}): ` + e.message; } finally { state.aiLoading = false; renderApp(); }
+    } catch (e) { state.aiError = `生成エラー: ` + e.message; } finally { state.aiLoading = false; renderApp(); }
 };
 
 window.handleSaveImage = () => {
@@ -1043,4 +1059,3 @@ window.performSend = () => {
 
 // --- 5. 初期描画 ---
 renderApp();
-
