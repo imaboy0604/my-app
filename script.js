@@ -1501,14 +1501,14 @@ function initSpeechRecognition() {
         state.speechRecognition.transcribedText = previousFinal + finalText;
         state.speechRecognition.interimText = interimText;
         
-        // ミラーモードのレビューフェーズの場合のみテキストボックスに自動入力
-        if (state.mirrorMode && state.mirrorPhase === 'review') {
-            const inputElement = document.getElementById('mirror-ai-answer-input');
-            if (inputElement) {
-                // レビューフェーズでは確定テキスト + 途中テキストを表示
-                inputElement.value = state.speechRecognition.transcribedText + interimText;
-            }
-        }
+        // ミラーモードのレビューフェーズの場合のみテキストボックスに自動入力（無効化中）
+        // if (state.mirrorMode && state.mirrorPhase === 'review') {
+        //     const inputElement = document.getElementById('mirror-ai-answer-input');
+        //     if (inputElement) {
+        //         // レビューフェーズでは確定テキスト + 途中テキストを表示
+        //         inputElement.value = state.speechRecognition.transcribedText + interimText;
+        //     }
+        // }
         
         // 質問フェーズ中はリアルタイム表示を更新（無効化中）
         // if (state.mirrorMode && state.mirrorPhase === 'question' && state.countdownActive) {
@@ -2097,20 +2097,7 @@ function renderMirrorMode() {
                                 <span class="text-purple-600">${ICONS.Sparkles}</span>
                                 <h4 class="font-bold text-lg text-slate-800">AIで回答案を作成</h4>
                             </div>
-                            <!-- 音声認識結果表示（無効化中） -->
-                            <!-- ${speechText ? `
-                                <div class="mb-3 neo-card-inset p-3 rounded-lg bg-blue-50 border border-blue-200">
-                                    <div class="text-xs font-bold text-blue-700 mb-1 flex items-center gap-2">
-                                        ${ICONS.BookOpen} 音声認識結果
-                                    </div>
-                                    <div class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">${speechText}</div>
-                                    ${!hasExistingAnswer ? `
-                                        <p class="text-xs text-blue-600 mt-2">この内容をAI回答生成に使用できます</p>
-                                    ` : `
-                                        <p class="text-xs text-orange-600 mt-2">既存回答があります。ブラッシュアップ用として使用できます</p>
-                                    `}
-                                </div>
-                            ` : ''} -->
+                            <!-- 音声認識結果表示（完全に削除） -->
                             <div class="space-y-3">
                                 <textarea 
                                     id="mirror-ai-answer-input"
