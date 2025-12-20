@@ -130,6 +130,7 @@ const state = {
     confirmModal: { isOpen: false, message: "", actionName: null },
     aiAnswerModal: { isOpen: false, questionText: "", qNo: null },
     bulkAnswerModal: { isOpen: false }, // 未回答一覧モーダル用
+    editAnswerModal: { isOpen: false, questionText: "", currentAnswer: "", qNo: null, aiImproving: false, aiImproveError: null },
     errorLog: "",
     isLoadingSettings: false,
     // ミラーモード用
@@ -583,7 +584,12 @@ function renderQuestionModal() {
                             <span class="flex items-center gap-2">${ICONS.BookOpen} PREP回答メモ</span>
                             <span class="text-xs group-open:rotate-180 transition-transform">▼</span>
                         </summary>
-                        <div class="p-4 text-sm text-slate-700 prep-memo-content animate-fade-in">${answerText}</div>
+                        <div class="p-4">
+                            <div class="text-sm text-slate-700 prep-memo-content animate-fade-in mb-3">${answerText}</div>
+                            <button onclick="openEditAnswerModal('${q.no}', '${q.q.replace(/'/g, "\\'")}')" class="neo-btn flex items-center gap-2 px-4 py-2 text-sm font-bold text-purple-700 cursor-pointer">
+                                ${ICONS.Edit} 編集する
+                            </button>
+                        </div>
                     </details>
                 </div>
             `;
@@ -719,6 +725,66 @@ function renderAiAnswerModal() {
     `;
 }
 
+function renderEditAnswerModal() {
+    if (!state.editAnswerModal.isOpen) return '';
+    const modal = state.editAnswerModal;
+    
+    return `
+        <div class="fixed inset-0 z-[75] flex items-center justify-center p-4 modal-overlay animate-fade-in overflow-y-auto" onclick="closeEditAnswerModal()">
+            <div class="neo-modal w-full max-w-2xl my-8" onclick="event.stopPropagation()">
+                <div class="neo-modal-header p-6 flex justify-between items-center shrink-0">
+                    <h3 class="text-xl font-bold text-slate-800 flex items-center gap-2">
+                        <span class="text-purple-500">${ICONS.Edit}</span> PREP回答メモを編集
+                    </h3>
+                    <button onclick="closeEditAnswerModal()" class="neo-btn neo-close p-2 rounded-full">${ICONS.X}</button>
+                </div>
+                <div class="p-6 flex-1 overflow-y-auto custom-scrollbar">
+                    <div class="mb-4 neo-card-inset p-4 rounded-lg">
+                        <p class="text-xs text-slate-500 font-bold mb-1">対象の質問</p>
+                        <p class="text-slate-800 font-bold">${modal.questionText}</p>
+                    </div>
+                    
+                    <div class="mb-6">
+                        <label class="block text-sm font-bold text-slate-700 mb-2">回答メモ（編集可能）</label>
+                        <textarea id="edit-answer-input" class="w-full p-4 neo-card-inset rounded-lg min-h-[200px] focus:ring-2 focus:ring-purple-500 appearance-none text-sm prep-memo-content">${modal.currentAnswer}</textarea>
+                    </div>
+                    
+                    <div class="mb-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
+                        <p class="text-xs text-blue-800 font-bold mb-2 flex items-center gap-2">
+                            ${ICONS.Lightbulb} 編集方法
+                        </p>
+                        <ul class="text-xs text-blue-700 space-y-1 list-disc list-inside">
+                            <li><strong>手動編集：</strong>上記のテキストエリアを直接編集して「保存」ボタンをクリック</li>
+                            <li><strong>AI修正：</strong>「AIで改善する」ボタンで、現在の内容を元にAIが改善版を生成</li>
+                        </ul>
+                    </div>
+                    
+                    ${modal.aiImproveError ? `
+                        <div class="neo-card-inset text-red-600 p-3 rounded-lg text-sm flex items-center gap-2 mb-4">
+                            ${ICONS.AlertCircle} ${modal.aiImproveError}
+                        </div>
+                    ` : ''}
+                    
+                    <div class="flex flex-col sm:flex-row gap-3">
+                        <button 
+                            onclick="runAiAnswerImprovement()" 
+                            ${modal.aiImproving ? 'disabled' : ''} 
+                            class="flex-1 py-3 neo-btn-primary rounded-lg font-bold hover:opacity-90 transition-opacity flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer">
+                            ${modal.aiImproving ? ICONS.Loader2 : ICONS.Sparkles} 
+                            ${modal.aiImproving ? '改善中...' : 'AIで改善する'}
+                        </button>
+                        <button 
+                            onclick="saveEditedAnswer()" 
+                            class="flex-1 py-3 neo-btn-primary rounded-lg font-bold hover:opacity-90 transition-opacity flex items-center justify-center gap-2 cursor-pointer">
+                            ${ICONS.Save} 保存
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
 function renderBulkAnswerModal() {
     if (!state.bulkAnswerModal.isOpen) return '';
 
@@ -811,6 +877,7 @@ function renderApp() {
         ${renderQuestionModal()}
         ${renderAiModal()}
         ${renderAiAnswerModal()}
+        ${renderEditAnswerModal()}
         ${renderBulkAnswerModal()}
         ${renderConfirmModal()}
         ${renderMirrorSelectionModal()}
@@ -920,6 +987,120 @@ window.closeAiAnswerModal = () => {
     renderApp();
 };
 
+window.openEditAnswerModal = (qNo) => {
+    let questionText = "";
+    state.categories.forEach(cat => {
+        const q = cat.questions.find(q => q.no === qNo);
+        if(q) questionText = q.q;
+    });
+    
+    if (!questionText) { 
+        alert("質問が見つかりませんでした"); 
+        return; 
+    }
+    
+    const currentAnswer = state.answers[questionText] || "";
+    state.editAnswerModal = { 
+        isOpen: true, 
+        questionText: questionText, 
+        currentAnswer: currentAnswer,
+        qNo: qNo,
+        aiImproving: false,
+        aiImproveError: null
+    };
+    renderApp();
+};
+
+window.closeEditAnswerModal = () => {
+    state.editAnswerModal = { 
+        isOpen: false, 
+        questionText: "", 
+        currentAnswer: "",
+        qNo: null,
+        aiImproving: false,
+        aiImproveError: null
+    };
+    renderApp();
+};
+
+window.runAiAnswerImprovement = async () => {
+    const modal = state.editAnswerModal;
+    const currentAnswer = document.getElementById('edit-answer-input').value;
+    
+    if (!currentAnswer || !currentAnswer.trim()) {
+        alert("編集する内容を入力してください");
+        return;
+    }
+    
+    state.editAnswerModal.aiImproving = true;
+    state.editAnswerModal.aiImproveError = null;
+    renderApp();
+    
+    try {
+        const prompt = `あなたは就活生のメンターです。
+以下の「質問」と「現在のPREP回答メモ」を確認し、より良い「PREP構成メモ」に改善してください。
+
+【制約事項】
+・**文章（台本）は禁止**です。
+・「〜です/〜ます」は使わず、体言止めや単語で端的に記述してください。
+・各項目は1行〜2行で短くまとめてください。
+・要点のみを箇条書きにしてください。
+・現在の内容の良い点は活かしつつ、より分かりやすく、面接で使いやすい形に改善してください。
+
+質問: "${modal.questionText}"
+現在のPREP回答メモ:
+${currentAnswer}
+
+出力フォーマット:
+・結論：(要点のみ)
+・理由：(要点のみ)
+・具体例：(要点のみ)
+・まとめ：(要点のみ)`;
+
+        const response = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt: prompt })
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || 'Server Error');
+        }
+
+        const data = await response.json();
+        const improvedAnswer = data.candidates[0].content.parts[0].text;
+        
+        // テキストエリアに改善された内容を反映
+        const inputElement = document.getElementById('edit-answer-input');
+        if (inputElement) {
+            inputElement.value = improvedAnswer;
+        }
+        state.editAnswerModal.currentAnswer = improvedAnswer;
+        
+    } catch (e) {
+        state.editAnswerModal.aiImproveError = "改善エラー: " + e.message;
+    } finally {
+        state.editAnswerModal.aiImproving = false;
+        renderApp();
+    }
+};
+
+window.saveEditedAnswer = () => {
+    const modal = state.editAnswerModal;
+    const editedAnswer = document.getElementById('edit-answer-input').value;
+    
+    if (!editedAnswer || !editedAnswer.trim()) {
+        alert("回答メモを入力してください");
+        return;
+    }
+    
+    saveAnswer(modal.questionText, editedAnswer);
+    closeEditAnswerModal();
+    closeQuestion(); // 質問モーダルも閉じる
+    renderApp();
+};
+
 window.openBulkAnswerModal = () => {
     state.bulkAnswerModal.isOpen = true;
     renderApp();
@@ -1000,34 +1181,34 @@ window.runAiAnswerGenerationForMirror = async () => {
     const hasExistingAnswer = hasAnswer(questionText);
     const speechText = state.mirrorReviewData.speechTranscription || '';
     
-    // テキストボックスから取得（手動入力 or 音声認識結果）
+    // テキストボックスから取得（手動入力のみ、音声認識は無効化中）
     let userInput = document.getElementById('mirror-ai-answer-input').value.trim();
 
-    // 入力が空の場合は音声認識結果を使用
-    if (!userInput && speechText) {
-        userInput = speechText;
-        // テキストボックスにもセット
-        document.getElementById('mirror-ai-answer-input').value = speechText;
-    }
+    // 入力が空の場合は音声認識結果を使用（無効化中）
+    // if (!userInput && speechText) {
+    //     userInput = speechText;
+    //     // テキストボックスにもセット
+    //     document.getElementById('mirror-ai-answer-input').value = speechText;
+    // }
 
     if (!userInput) {
-        state.mirrorReviewData.aiAnswerError = "回答のメモを入力するか、音声認識結果を使用してください";
+        state.mirrorReviewData.aiAnswerError = "回答のメモを入力してください";
         renderApp();
         return;
     }
 
-    // 回答済みの質問で、音声認識結果のみの場合は確認
-    if (hasExistingAnswer && userInput === speechText && speechText) {
-        const confirmMessage = `既存の回答があります。\n\n既存回答:\n${state.answers[questionText].substring(0, 100)}...\n\n音声認識結果で上書きしますか？\n（キャンセルすると既存回答を保持します）`;
-        const shouldOverwrite = confirm(confirmMessage);
-        if (!shouldOverwrite) {
-            // 既存回答をテキストボックスに表示
-            document.getElementById('mirror-ai-answer-input').value = state.answers[questionText];
-            state.mirrorReviewData.aiAnswerInput = state.answers[questionText];
-            renderApp();
-            return;
-        }
-    }
+    // 回答済みの質問で、音声認識結果のみの場合は確認（無効化中）
+    // if (hasExistingAnswer && userInput === speechText && speechText) {
+    //     const confirmMessage = `既存の回答があります。\n\n既存回答:\n${state.answers[questionText].substring(0, 100)}...\n\n音声認識結果で上書きしますか？\n（キャンセルすると既存回答を保持します）`;
+    //     const shouldOverwrite = confirm(confirmMessage);
+    //     if (!shouldOverwrite) {
+    //         // 既存回答をテキストボックスに表示
+    //         document.getElementById('mirror-ai-answer-input').value = state.answers[questionText];
+    //         state.mirrorReviewData.aiAnswerInput = state.answers[questionText];
+    //         renderApp();
+    //         return;
+    //     }
+    // }
 
     state.mirrorReviewData.aiAnswerLoading = true;
     state.mirrorReviewData.aiAnswerError = null;
@@ -1211,18 +1392,18 @@ window.performSend = () => {
         feedbacksToSend.push({ category: catTitle, question: qText, good: fb.good, bad: fb.advice });
     });
 
-    // ミラーモードでの音声認識データを収集
+    // ミラーモードでの音声認識データを収集（無効化中）
     const mirrorAnswers = [];
     if (state.mirrorMode && state.mirrorQuestions.length > 0) {
         state.mirrorQuestions.forEach((q, index) => {
             const answerText = state.answers[q.q];
-            const speechText = state.speechRecognition.transcribedText; // 最後の音声認識結果
-            if (answerText || speechText) {
+            // const speechText = state.speechRecognition.transcribedText; // 最後の音声認識結果（無効化中）
+            if (answerText) { // speechText の条件を削除
                 mirrorAnswers.push({
                     questionNo: q.no,
                     question: q.q,
-                    answer: answerText || '',
-                    speechTranscription: index === state.currentQuestionIndex ? speechText : null
+                    answer: answerText || ''
+                    // speechTranscription: index === state.currentQuestionIndex ? speechText : null（無効化中）
                 });
             }
         });
@@ -1328,20 +1509,20 @@ function initSpeechRecognition() {
             }
         }
         
-        // 質問フェーズ中はリアルタイム表示を更新（DOM直接操作で高速化）
-        if (state.mirrorMode && state.mirrorPhase === 'question' && state.countdownActive) {
-            const liveTextElement = document.getElementById('mirror-live-transcription');
-            if (liveTextElement) {
-                const displayText = state.speechRecognition.transcribedText + interimText;
-                liveTextElement.textContent = displayText;
-                // テキストがある場合は表示、ない場合は非表示
-                if (displayText.trim()) {
-                    liveTextElement.style.display = 'block';
-                } else {
-                    liveTextElement.style.display = 'none';
-                }
-            }
-        }
+        // 質問フェーズ中はリアルタイム表示を更新（無効化中）
+        // if (state.mirrorMode && state.mirrorPhase === 'question' && state.countdownActive) {
+        //     const liveTextElement = document.getElementById('mirror-live-transcription');
+        //     if (liveTextElement) {
+        //         const displayText = state.speechRecognition.transcribedText + interimText;
+        //         liveTextElement.textContent = displayText;
+        //         // テキストがある場合は表示、ない場合は非表示
+        //         if (displayText.trim()) {
+        //             liveTextElement.style.display = 'block';
+        //         } else {
+        //             liveTextElement.style.display = 'none';
+        //         }
+        //     }
+        // }
         
         renderApp();
     };
@@ -1914,7 +2095,8 @@ function renderMirrorMode() {
                                 <span class="text-purple-600">${ICONS.Sparkles}</span>
                                 <h4 class="font-bold text-lg text-slate-800">AIで回答案を作成</h4>
                             </div>
-                            ${speechText ? `
+                            <!-- 音声認識結果表示（無効化中） -->
+                            <!-- ${speechText ? `
                                 <div class="mb-3 neo-card-inset p-3 rounded-lg bg-blue-50 border border-blue-200">
                                     <div class="text-xs font-bold text-blue-700 mb-1 flex items-center gap-2">
                                         ${ICONS.BookOpen} 音声認識結果
@@ -1926,16 +2108,16 @@ function renderMirrorMode() {
                                         <p class="text-xs text-orange-600 mt-2">既存回答があります。ブラッシュアップ用として使用できます</p>
                                     `}
                                 </div>
-                            ` : ''}
+                            ` : ''} -->
                             <div class="space-y-3">
                                 <textarea 
                                     id="mirror-ai-answer-input"
                                     class="w-full p-3 neo-card-inset rounded-lg h-32 focus:ring-2 focus:ring-purple-500 appearance-none text-sm"
                                     placeholder="回答のメモ・キーワードを入力（例：結論：〇〇です&#10;理由：なぜなら〜&#10;具体例：例えば〜）">${initialInputValue}</textarea>
-                                <p class="text-xs text-slate-400">※箇条書きやキーワードだけでOK。AIがPREP法に整えます。${speechText ? '音声認識結果が自動入力されています。' : ''}</p>
+                                <p class="text-xs text-slate-400">※箇条書きやキーワードだけでOK。AIがPREP法に整えます。</p>
                                 
-                                <!-- 音声認識ボタン -->
-                                ${(window.SpeechRecognition || window.webkitSpeechRecognition) ? `
+                                <!-- 音声認識ボタン（無効化中） -->
+                                <!-- ${(window.SpeechRecognition || window.webkitSpeechRecognition) ? `
                                     <div class="flex gap-2">
                                         ${state.speechRecognition.isActive ? `
                                             <button 
@@ -1980,7 +2162,7 @@ function renderMirrorMode() {
                                     <div class="neo-card-inset text-red-600 p-3 rounded-lg text-sm flex items-center gap-2">
                                         ${ICONS.AlertCircle} ${state.speechRecognition.errorMessage}
                                     </div>
-                                ` : ''}
+                                ` : ''} -->
                                 
                                 ${state.mirrorReviewData.aiAnswerError ? `
                                     <div class="neo-card-inset text-red-600 p-3 rounded-lg text-sm flex items-center gap-2">
@@ -2081,14 +2263,15 @@ function renderMirrorMode() {
     }
     
     // 質問表示中
-    const liveTranscriptionText = state.speechRecognition.transcribedText + state.speechRecognition.interimText;
+    // リアルタイム文字起こし表示（無効化中）
+    // const liveTranscriptionText = state.speechRecognition.transcribedText + state.speechRecognition.interimText;
     
     return `
         <div class="mirror-container fixed inset-0 bg-slate-900">
             <video id="mirror-video" class="mirror-video" autoplay playsinline></video>
             <div class="mirror-overlay fixed inset-0 flex flex-col items-center p-4 overflow-hidden">
-                <!-- リアルタイム文字起こし表示（半透明） -->
-                ${state.countdownActive && liveTranscriptionText ? `
+                <!-- リアルタイム文字起こし表示（無効化中） -->
+                <!-- ${state.countdownActive && liveTranscriptionText ? `
                     <div id="mirror-live-transcription" class="mirror-live-transcription fixed bottom-20 left-0 right-0 px-4 z-30 pointer-events-none">
                         <div class="max-w-4xl mx-auto">
                             <div class="bg-black/60 backdrop-blur-md rounded-2xl p-4 sm:p-6 border border-white/20">
@@ -2106,7 +2289,7 @@ function renderMirrorMode() {
                             </div>
                         </div>
                     </div>
-                `}
+                `} -->
                 
                 <!-- コンテンツエリア（中央配置、画面内に収まるように） -->
                 <div class="mirror-content-area w-full max-w-3xl flex flex-col items-center justify-center flex-1 min-h-0">
