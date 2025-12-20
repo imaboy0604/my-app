@@ -152,6 +152,14 @@ const state = {
         aiAnswerError: null,
         feedbackGood: '',
         feedbackMore: ''
+    },
+    speechRecognition: {
+        isActive: false,
+        isSupported: false,
+        recognition: null,
+        transcribedText: '',
+        interimText: '',
+        errorMessage: null
     }
 };
 
@@ -1164,13 +1172,32 @@ window.performSend = () => {
         feedbacksToSend.push({ category: catTitle, question: qText, good: fb.good, bad: fb.advice });
     });
 
+    // ミラーモードでの音声認識データを収集
+    const mirrorAnswers = [];
+    if (state.mirrorMode && state.mirrorQuestions.length > 0) {
+        state.mirrorQuestions.forEach((q, index) => {
+            const answerText = state.answers[q.q];
+            const speechText = state.speechRecognition.transcribedText; // 最後の音声認識結果
+            if (answerText || speechText) {
+                mirrorAnswers.push({
+                    questionNo: q.no,
+                    question: q.q,
+                    answer: answerText || '',
+                    speechTranscription: index === state.currentQuestionIndex ? speechText : null
+                });
+            }
+        });
+    }
+    
     const meta = {
         timestamp: new Date().toLocaleString(),
         interviewer: state.interviewerName,
         sessionCount: state.sessionCount,
         totalScore: state.calculations.total,
         judgment: state.calculations.judgment,
-        overallFeedback: state.overallFeedback
+        overallFeedback: state.overallFeedback,
+        // 音声認識データを追加（ミラーモードの場合）
+        mirrorAnswers: mirrorAnswers.length > 0 ? mirrorAnswers : null
     };
 
     fetch(GAS_SCRIPT_URL, {
@@ -1209,6 +1236,154 @@ window.performSend = () => {
 
 // ==========================================
 // ▼▼▼ ミラーモード機能 ▼▼▼
+// ==========================================
+
+// ==========================================
+// ▼▼▼ 音声認識機能 ▼▼▼
+// ==========================================
+
+// 音声認識初期化
+function initSpeechRecognition() {
+    // 既に初期化済みの場合はそれを返す
+    if (state.speechRecognition.recognition) {
+        return state.speechRecognition.recognition;
+    }
+    
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    
+    if (!SpeechRecognition) {
+        state.speechRecognition.isSupported = false;
+        return null;
+    }
+    
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'ja-JP';
+    recognition.continuous = true; // 連続認識
+    recognition.interimResults = true; // 途中結果も取得
+    
+    recognition.onresult = (event) => {
+        let interimText = '';
+        let finalText = '';
+        
+        // 全ての結果を処理
+        for (let i = 0; i < event.results.length; i++) {
+            const transcript = event.results[i][0].transcript;
+            if (event.results[i].isFinal) {
+                finalText += transcript;
+            } else {
+                interimText += transcript;
+            }
+        }
+        
+        // 既存の確定テキストに追加
+        const previousFinal = state.speechRecognition.transcribedText || '';
+        state.speechRecognition.transcribedText = previousFinal + finalText;
+        state.speechRecognition.interimText = interimText;
+        
+        // テキストボックスに自動入力（確定テキスト + 途中テキスト）
+        const inputElement = document.getElementById('mirror-ai-answer-input');
+        if (inputElement) {
+            inputElement.value = state.speechRecognition.transcribedText + interimText;
+        }
+        
+        renderApp();
+    };
+    
+    recognition.onerror = (event) => {
+        console.error('Speech recognition error:', event.error);
+        state.speechRecognition.isActive = false;
+        
+        let errorMessage = '音声認識エラーが発生しました';
+        if (event.error === 'not-allowed') {
+            errorMessage = 'マイクの権限が拒否されました。ブラウザの設定でマイクへのアクセスを許可してください。';
+        } else if (event.error === 'no-speech') {
+            errorMessage = '音声が検出されませんでした。';
+        } else if (event.error === 'network') {
+            errorMessage = 'ネットワークエラーが発生しました。';
+        }
+        
+        state.speechRecognition.errorMessage = errorMessage;
+        renderApp();
+    };
+    
+    recognition.onend = () => {
+        state.speechRecognition.isActive = false;
+        renderApp();
+    };
+    
+    state.speechRecognition.recognition = recognition;
+    state.speechRecognition.isSupported = true;
+    return recognition;
+}
+
+// 録音開始
+window.startSpeechRecognition = () => {
+    // ブラウザ対応チェック（初回のみ）
+    if (state.speechRecognition.recognition === null && !state.speechRecognition.isSupported) {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRecognition) {
+            state.speechRecognition.isSupported = false;
+            alert('お使いのブラウザでは音声認識に対応していません。ChromeまたはEdgeをご利用ください。');
+            return;
+        }
+    }
+    
+    if (!state.speechRecognition.recognition) {
+        const recognition = initSpeechRecognition();
+        if (!recognition) {
+            alert('お使いのブラウザでは音声認識に対応していません。ChromeまたはEdgeをご利用ください。');
+            return;
+        }
+    }
+    
+    try {
+        state.speechRecognition.recognition.start();
+        state.speechRecognition.isActive = true;
+        state.speechRecognition.transcribedText = '';
+        state.speechRecognition.interimText = '';
+        state.speechRecognition.errorMessage = null;
+        renderApp();
+    } catch (e) {
+        console.error('Failed to start speech recognition:', e);
+        if (e.name === 'InvalidStateError') {
+            // 既に開始されている場合は無視
+            state.speechRecognition.isActive = true;
+            renderApp();
+        } else {
+            alert('音声認識を開始できませんでした。マイクの権限を確認してください。');
+            state.speechRecognition.isActive = false;
+            state.speechRecognition.errorMessage = 'マイクの権限を確認してください。';
+            renderApp();
+        }
+    }
+};
+
+// 録音停止
+window.stopSpeechRecognition = () => {
+    if (state.speechRecognition.recognition && state.speechRecognition.isActive) {
+        state.speechRecognition.recognition.stop();
+        state.speechRecognition.isActive = false;
+        
+        // 最終的な文字起こし結果をテキストボックスにセット
+        const inputElement = document.getElementById('mirror-ai-answer-input');
+        if (inputElement) {
+            // 既存のテキストがある場合は追記、ない場合は置き換え
+            const currentValue = inputElement.value || '';
+            const newText = state.speechRecognition.transcribedText;
+            if (currentValue && newText) {
+                // 既存テキストに追記（改行を追加）
+                inputElement.value = currentValue + (currentValue.endsWith('\n') ? '' : '\n') + newText;
+            } else if (newText) {
+                inputElement.value = newText;
+            }
+        }
+        
+        renderApp();
+    }
+};
+
+// ==========================================
+// ▼▼▼ ミラーモード機能（続き） ▼▼▼
 // ==========================================
 
 // ユーティリティ: 配列をシャッフル
@@ -1351,6 +1526,10 @@ async function startMirrorMode() {
 // ミラーモード終了
 window.exitMirrorMode = () => {
     stopCamera();
+    // 音声認識も停止
+    if (state.speechRecognition.recognition && state.speechRecognition.isActive) {
+        stopSpeechRecognition();
+    }
     if (state.countdownInterval) {
         clearInterval(state.countdownInterval);
         state.countdownInterval = null;
@@ -1373,6 +1552,11 @@ window.exitMirrorMode = () => {
         feedbackGood: '',
         feedbackMore: ''
     };
+    // 音声認識データをリセット
+    state.speechRecognition.isActive = false;
+    state.speechRecognition.transcribedText = '';
+    state.speechRecognition.interimText = '';
+    state.speechRecognition.errorMessage = null;
     renderApp();
 };
 
@@ -1439,6 +1623,10 @@ function startCountdown() {
 
 // 次の質問へ（レビューフェーズから呼び出される）
 function nextQuestion() {
+    // 音声認識を停止
+    if (state.speechRecognition.recognition && state.speechRecognition.isActive) {
+        stopSpeechRecognition();
+    }
     state.countdownTimer = 20;
     state.countdownActive = false;
     state.showCheatSheet = false;
@@ -1448,6 +1636,10 @@ function nextQuestion() {
     state.mirrorReviewData.feedbackGood = '';
     state.mirrorReviewData.feedbackMore = '';
     state.mirrorReviewData.aiAnswerError = null;
+    // 音声認識データをリセット
+    state.speechRecognition.transcribedText = '';
+    state.speechRecognition.interimText = '';
+    state.speechRecognition.errorMessage = null;
     
     if (state.currentQuestionIndex < state.mirrorQuestions.length - 1) {
         state.currentQuestionIndex++;
@@ -1503,6 +1695,10 @@ window.restartMirrorMode = () => {
 
 // 同じ質問に再挑戦
 window.retryMirrorQuestion = () => {
+    // 音声認識を停止
+    if (state.speechRecognition.recognition && state.speechRecognition.isActive) {
+        stopSpeechRecognition();
+    }
     state.mirrorPhase = 'question';
     state.countdownTimer = 20;
     state.countdownActive = false;
@@ -1600,6 +1796,55 @@ function renderMirrorMode() {
                                     class="w-full p-3 neo-card-inset rounded-lg h-32 focus:ring-2 focus:ring-purple-500 appearance-none text-sm"
                                     placeholder="回答のメモ・キーワードを入力（例：結論：〇〇です&#10;理由：なぜなら〜&#10;具体例：例えば〜）">${state.mirrorReviewData.aiAnswerInput}</textarea>
                                 <p class="text-xs text-slate-400">※箇条書きやキーワードだけでOK。AIがPREP法に整えます。</p>
+                                
+                                <!-- 音声認識ボタン -->
+                                ${(window.SpeechRecognition || window.webkitSpeechRecognition) ? `
+                                    <div class="flex gap-2">
+                                        ${state.speechRecognition.isActive ? `
+                                            <button 
+                                                onclick="stopSpeechRecognition()" 
+                                                class="flex-1 py-3 neo-btn-warn rounded-lg font-bold flex items-center justify-center gap-2 cursor-pointer">
+                                                <span class="w-4 h-4 rounded-full bg-red-500 speech-recording-indicator"></span>
+                                                録音停止
+                                            </button>
+                                        ` : `
+                                            <button 
+                                                onclick="startSpeechRecognition()" 
+                                                class="flex-1 py-3 neo-btn rounded-lg font-bold flex items-center justify-center gap-2 cursor-pointer speech-recognition-button">
+                                                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                                                    <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                                                    <line x1="12" y1="19" x2="12" y2="23"/>
+                                                    <line x1="8" y1="23" x2="16" y2="23"/>
+                                                </svg>
+                                                音声入力
+                                            </button>
+                                        `}
+                                    </div>
+                                ` : `
+                                    <div class="neo-card-inset p-3 rounded-lg text-xs text-slate-500 text-center">
+                                        音声認識機能はChromeまたはEdgeでのみ利用可能です
+                                    </div>
+                                `}
+                                
+                                ${state.speechRecognition.isActive ? `
+                                    <div class="neo-card-inset p-3 rounded-lg text-sm text-slate-600">
+                                        <div class="flex items-center gap-2 mb-1">
+                                            <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
+                                            <span class="font-bold">録音中...</span>
+                                        </div>
+                                        ${state.speechRecognition.interimText ? `
+                                            <div class="text-xs text-slate-500 mt-1 italic">${state.speechRecognition.interimText}</div>
+                                        ` : ''}
+                                    </div>
+                                ` : ''}
+                                
+                                ${state.speechRecognition.errorMessage ? `
+                                    <div class="neo-card-inset text-red-600 p-3 rounded-lg text-sm flex items-center gap-2">
+                                        ${ICONS.AlertCircle} ${state.speechRecognition.errorMessage}
+                                    </div>
+                                ` : ''}
+                                
                                 ${state.mirrorReviewData.aiAnswerError ? `
                                     <div class="neo-card-inset text-red-600 p-3 rounded-lg text-sm flex items-center gap-2">
                                         ${ICONS.AlertCircle} ${state.mirrorReviewData.aiAnswerError}

@@ -234,6 +234,24 @@ button:active { transform: scale(0.98); transition: transform 0.05s; }
     background: rgba(224, 229, 236, 0.8);
 }
 
+/* 音声認識ボタン用スタイル */
+.speech-recognition-button {
+    transition: all 0.2s ease;
+}
+
+.speech-recognition-button:active {
+    transform: scale(0.98);
+}
+
+@keyframes pulse-red {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.speech-recording-indicator {
+    animation: pulse-red 1s ease-in-out infinite;
+}
+
 /* レスポンシブ対応 */
 @media (max-width: 640px) {
     .mirror-question-card {
