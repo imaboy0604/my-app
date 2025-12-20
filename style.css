@@ -219,6 +219,21 @@ button:active { transform: scale(0.98); transition: transform 0.05s; }
     animation: pulse 1s ease-in-out infinite;
 }
 
+/* レビューフェーズ用スタイル */
+.mirror-review-card {
+    background: rgba(224, 229, 236, 0.95);
+    backdrop-filter: blur(10px);
+    box-shadow: var(--neo-shadow-dark), var(--neo-shadow-light);
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    animation: fadeIn 0.4s ease-out;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+
+.mirror-review-card .neo-card-inset {
+    background: rgba(224, 229, 236, 0.8);
+}
+
 /* レスポンシブ対応 */
 @media (max-width: 640px) {
     .mirror-question-card {
@@ -236,6 +251,16 @@ button:active { transform: scale(0.98); transition: transform 0.05s; }
     
     .mirror-timer-container span {
         font-size: 1.5rem !important;
+    }
+    
+    .mirror-review-card {
+        padding: 1.25rem !important;
+        max-height: 95vh;
+    }
+    
+    .mirror-review-card h3,
+    .mirror-review-card h4 {
+        font-size: 1rem !important;
     }
 }
 

@@ -141,7 +141,18 @@ const state = {
     countdownInterval: null,
     cameraStream: null,
     showCheatSheet: false,
-    mirrorPhase: 'waiting' // 'waiting', 'ready', 'question', 'complete'
+    mirrorPhase: 'waiting', // 'waiting', 'ready', 'question', 'review', 'complete'
+    mirrorQuestionMode: 'random', // 'random' or 'manual'
+    mirrorSelectedQuestions: [], // 手動選択モード用
+    mirrorSelectionModalOpen: false, // 質問選択モーダル
+    mirrorReviewData: {
+        currentQuestionNo: null,
+        aiAnswerInput: '',
+        aiAnswerLoading: false,
+        aiAnswerError: null,
+        feedbackGood: '',
+        feedbackMore: ''
+    }
 };
 
 // --- 初期化チェック ---
@@ -234,7 +245,7 @@ function renderStrategy() {
 function renderMirrorModeButton() {
     return `
         <div class="neo-card overflow-hidden p-5 sm:p-6 mb-4 sm:mb-6">
-            <div class="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+            <div class="flex flex-col sm:flex-row items-start sm:items-center gap-4 mb-4">
                 <div class="flex-1">
                     <div class="flex items-center gap-2 mb-2">
                         <div class="neo-btn neo-card-inset p-2.5 text-purple-600">${ICONS.User}</div>
@@ -242,8 +253,13 @@ function renderMirrorModeButton() {
                     </div>
                     <p class="text-sm text-slate-600 leading-relaxed">自分の顔を鏡のように見ながら、20秒で端的に答える反復練習モード</p>
                 </div>
-                <button onclick="startMirrorMode()" class="neo-btn-primary px-6 py-3 rounded-xl font-bold flex items-center gap-2 cursor-pointer active:scale-[0.98] whitespace-nowrap">
-                    ${ICONS.Play} 開始
+            </div>
+            <div class="flex flex-col sm:flex-row gap-3">
+                <button onclick="openMirrorModeSelection('random')" class="neo-btn-primary flex-1 px-6 py-3 rounded-xl font-bold flex items-center justify-center gap-2 cursor-pointer active:scale-[0.98]">
+                    ${ICONS.Zap} ランダムモード
+                </button>
+                <button onclick="openMirrorModeSelection('manual')" class="neo-btn flex-1 px-6 py-3 rounded-xl font-bold flex items-center justify-center gap-2 cursor-pointer active:scale-[0.98] text-slate-700">
+                    ${ICONS.Target} 手動選択モード
                 </button>
             </div>
         </div>
@@ -750,11 +766,17 @@ function renderApp() {
         if (state.cameraStream) {
             setTimeout(() => {
                 const video = document.getElementById('mirror-video');
-                if (video && !video.srcObject) {
-                    video.srcObject = state.cameraStream;
-                    video.play();
+                if (video) {
+                    // 既にストリームが設定されている場合は再設定しない
+                    if (!video.srcObject) {
+                        video.srcObject = state.cameraStream;
+                    }
+                    // 再生状態を確認
+                    if (video.paused) {
+                        video.play().catch(e => console.error('Video play error:', e));
+                    }
                 }
-            }, 100);
+            }, 50);
         }
         return;
     }
@@ -775,6 +797,7 @@ function renderApp() {
         ${renderAiAnswerModal()}
         ${renderBulkAnswerModal()}
         ${renderConfirmModal()}
+        ${renderMirrorSelectionModal()}
         ${renderErrorLog()}
     `;
 }
@@ -948,6 +971,69 @@ window.runAiAnswerGeneration = async () => {
     }
 };
 
+// ミラーモード用AI回答生成
+window.runAiAnswerGenerationForMirror = async () => {
+    const currentQuestion = state.mirrorQuestions[state.currentQuestionIndex];
+    const questionText = currentQuestion.q;
+    const userInput = document.getElementById('mirror-ai-answer-input').value;
+
+    if (!userInput) {
+        state.mirrorReviewData.aiAnswerError = "回答のメモを入力してください";
+        renderApp();
+        return;
+    }
+
+    state.mirrorReviewData.aiAnswerLoading = true;
+    state.mirrorReviewData.aiAnswerError = null;
+    renderApp();
+
+    try {
+        const prompt = `あなたは就活生のメンターです。
+以下の「質問」に対し、ユーザーが入力した「回答メモ」を元に、面接中にチラッと見て内容を思い出せる「PREP構成メモ」を作成してください。
+
+【制約事項】
+・**文章（台本）は禁止**です。
+・「〜です/〜ます」は使わず、体言止めや単語で端的に記述してください。
+・各項目は1行〜2行で短くまとめてください。
+・要点のみを箇条書きにしてください。
+
+質問: "${questionText}"
+回答メモ: "${userInput}"
+
+出力フォーマット:
+・結論：(要点のみ)
+・理由：(要点のみ)
+・具体例：(要点のみ)
+・まとめ：(要点のみ)`;
+
+        // Vercel Serverless Function経由で呼び出し
+        const response = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt: prompt })
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || 'Server Error');
+        }
+
+        const data = await response.json();
+        const answerText = data.candidates[0].content.parts[0].text;
+
+        // 保存
+        saveAnswer(questionText, answerText);
+        state.mirrorReviewData.aiAnswerInput = '';
+        renderApp();
+
+    } catch (e) {
+        state.mirrorReviewData.aiAnswerError = "回答生成エラー: " + e.message;
+    } finally {
+        state.mirrorReviewData.aiAnswerLoading = false;
+        renderApp();
+    }
+};
+
 window.saveSettings = () => {
     if (!state.interviewerName) return;
     const payload = { action: 'save_settings', user: state.interviewerName, categories: state.categories };
@@ -1000,6 +1086,22 @@ window.closeQuestion = () => { state.selectedQuestion = null; state.timer = 0; s
 window.toggleTimer = () => { state.timerActive = !state.timerActive; if (state.timerActive) { state.timerInterval = setInterval(() => { state.timer++; renderApp(); }, 1000); } else { clearInterval(state.timerInterval); } renderApp(); };
 window.resetTimer = () => { state.timer = 0; state.timerActive = false; clearInterval(state.timerInterval); renderApp(); };
 window.saveFeedback = () => { const good = document.getElementById('fb-good').value; const advice = document.getElementById('fb-advice').value; state.feedback[state.selectedQuestion.no] = { good, advice }; localStorage.setItem('interview_feedback', JSON.stringify(state.feedback)); closeQuestion(); };
+
+// ミラーモード用フィードバック保存
+window.saveMirrorFeedback = () => {
+    const currentQuestion = state.mirrorQuestions[state.currentQuestionIndex];
+    const good = document.getElementById('mirror-fb-good').value;
+    const advice = document.getElementById('mirror-fb-more').value;
+    
+    state.feedback[currentQuestion.no] = { good, advice };
+    localStorage.setItem('interview_feedback', JSON.stringify(state.feedback));
+    
+    // レビューデータも更新
+    state.mirrorReviewData.feedbackGood = good;
+    state.mirrorReviewData.feedbackMore = advice;
+    
+    renderApp();
+};
 window.openAiModal = () => { state.aiModalOpen = true; state.aiError = null; renderApp(); };
 window.closeAiModal = () => { state.aiModalOpen = false; renderApp(); };
 
@@ -1119,13 +1221,19 @@ function shuffleArray(array) {
     return shuffled;
 }
 
-// 質問セット生成（全カテゴリからランダムに5問抽出）
+// 質問セット生成（ランダムモード）
 function generateMirrorQuestions() {
     const allQuestions = state.categories.flatMap(cat => 
         cat.questions.map(q => ({ ...q, categoryTitle: cat.title }))
     );
     const shuffled = shuffleArray(allQuestions);
     state.mirrorQuestions = shuffled.slice(0, 5);
+    state.currentQuestionIndex = 0;
+}
+
+// 手動選択モード用の質問セット設定
+function setManualMirrorQuestions(selectedQuestions) {
+    state.mirrorQuestions = selectedQuestions;
     state.currentQuestionIndex = 0;
 }
 
@@ -1159,11 +1267,65 @@ function stopCamera() {
     }
 }
 
-// ミラーモード開始
-window.startMirrorMode = async () => {
+// ミラーモード選択画面を開く
+window.openMirrorModeSelection = (mode) => {
+    state.mirrorQuestionMode = mode;
+    if (mode === 'random') {
+        // ランダムモードは直接開始
+        startMirrorMode();
+    } else {
+        // 手動選択モードは選択画面を表示
+        state.mirrorSelectionModalOpen = true;
+        renderApp();
+    }
+};
+
+// 手動選択モードの質問選択画面を閉じる
+window.closeMirrorSelectionModal = () => {
+    state.mirrorSelectionModalOpen = false;
+    state.mirrorSelectedQuestions = [];
+    renderApp();
+};
+
+// 質問を選択/解除
+window.toggleMirrorQuestion = (categoryId, questionNo) => {
+    const category = state.categories.find(c => c.id === categoryId);
+    if (!category) return;
+    const question = category.questions.find(q => q.no === questionNo);
+    if (!question) return;
+    
+    const questionWithCategory = { ...question, categoryTitle: category.title };
+    const index = state.mirrorSelectedQuestions.findIndex(q => q.no === questionNo);
+    if (index >= 0) {
+        state.mirrorSelectedQuestions.splice(index, 1);
+    } else {
+        state.mirrorSelectedQuestions.push(questionWithCategory);
+    }
+    renderApp();
+};
+
+// 手動選択モードで開始
+window.startManualMirrorMode = () => {
+    if (state.mirrorSelectedQuestions.length === 0) {
+        alert('少なくとも1問を選択してください');
+        return;
+    }
+    state.mirrorSelectionModalOpen = false;
+    setManualMirrorQuestions([...state.mirrorSelectedQuestions]);
+    state.mirrorSelectedQuestions = [];
+    startMirrorMode();
+};
+
+// ミラーモード開始（共通処理）
+async function startMirrorMode() {
     state.mirrorMode = true;
     state.mirrorPhase = 'waiting';
-    generateMirrorQuestions();
+    
+    // 質問セットが未設定の場合はランダム生成
+    if (state.mirrorQuestions.length === 0) {
+        generateMirrorQuestions();
+    }
+    
     renderApp();
     
     // カメラ許可を待つ
@@ -1184,7 +1346,7 @@ window.startMirrorMode = async () => {
         state.mirrorMode = false;
         renderApp();
     }
-};
+}
 
 // ミラーモード終了
 window.exitMirrorMode = () => {
@@ -1199,6 +1361,18 @@ window.exitMirrorMode = () => {
     state.countdownTimer = 20;
     state.countdownActive = false;
     state.showCheatSheet = false;
+    state.mirrorQuestions = [];
+    state.mirrorSelectedQuestions = [];
+    state.mirrorSelectionModalOpen = false;
+    // レビューデータをリセット
+    state.mirrorReviewData = {
+        currentQuestionNo: null,
+        aiAnswerInput: '',
+        aiAnswerLoading: false,
+        aiAnswerError: null,
+        feedbackGood: '',
+        feedbackMore: ''
+    };
     renderApp();
 };
 
@@ -1209,25 +1383,42 @@ function startCountdown() {
     }
     state.countdownActive = true;
     state.countdownTimer = 20;
+    updateTimerDisplay(); // 初期表示
     
     state.countdownInterval = setInterval(() => {
         state.countdownTimer--;
-        renderApp();
+        updateTimerDisplay(); // タイマー部分だけ更新（質問BOXは点滅しない）
         
         if (state.countdownTimer <= 0) {
             clearInterval(state.countdownInterval);
             state.countdownInterval = null;
             state.countdownActive = false;
-            nextQuestion();
+            // 自動で次の質問へ進まず、レビューフェーズへ
+            const currentQuestion = state.mirrorQuestions[state.currentQuestionIndex];
+            state.mirrorPhase = 'review';
+            state.mirrorReviewData.currentQuestionNo = currentQuestion.no;
+            // 既存のフィードバックがあれば読み込む
+            const existingFb = state.feedback[currentQuestion.no] || {};
+            state.mirrorReviewData.feedbackGood = existingFb.good || '';
+            state.mirrorReviewData.feedbackMore = existingFb.advice || '';
+            state.mirrorReviewData.aiAnswerInput = '';
+            state.mirrorReviewData.aiAnswerError = null;
+            renderApp();
         }
     }, 1000);
 }
 
-// 次の質問へ
+// 次の質問へ（レビューフェーズから呼び出される）
 function nextQuestion() {
     state.countdownTimer = 20;
     state.countdownActive = false;
     state.showCheatSheet = false;
+    // レビューデータをリセット
+    state.mirrorReviewData.currentQuestionNo = null;
+    state.mirrorReviewData.aiAnswerInput = '';
+    state.mirrorReviewData.feedbackGood = '';
+    state.mirrorReviewData.feedbackMore = '';
+    state.mirrorReviewData.aiAnswerError = null;
     
     if (state.currentQuestionIndex < state.mirrorQuestions.length - 1) {
         state.currentQuestionIndex++;
@@ -1281,6 +1472,16 @@ window.restartMirrorMode = () => {
     renderApp();
 };
 
+// 同じ質問に再挑戦
+window.retryMirrorQuestion = () => {
+    state.mirrorPhase = 'question';
+    state.countdownTimer = 20;
+    state.countdownActive = false;
+    state.showCheatSheet = false;
+    // レビューデータは保持（フィードバック等）
+    renderApp();
+};
+
 // ミラーモードUIレンダリング
 function renderMirrorMode() {
     const currentQuestion = state.mirrorQuestions[state.currentQuestionIndex];
@@ -1323,8 +1524,8 @@ function renderMirrorMode() {
                                 ${ICONS.User}
                             </div>
                             <h2 class="text-2xl font-bold text-slate-800 mb-2">準備完了</h2>
-                            <p class="text-slate-600 mb-4">5問の質問に20秒で答える練習を開始します</p>
-                            <p class="text-sm text-slate-500">質問はランダムに選ばれます</p>
+                            <p class="text-slate-600 mb-4">${state.mirrorQuestions.length}問の質問に20秒で答える練習を開始します</p>
+                            <p class="text-sm text-slate-500">${state.mirrorQuestionMode === 'random' ? '質問はランダムに選ばれました' : '選択した質問で練習します'}</p>
                         </div>
                         <div class="flex gap-3 justify-center">
                             <button onclick="exitMirrorMode()" class="neo-btn px-6 py-3 font-bold text-slate-700 cursor-pointer">
@@ -1332,6 +1533,107 @@ function renderMirrorMode() {
                             </button>
                             <button onclick="startAnswer()" class="neo-btn-primary px-8 py-3 font-bold cursor-pointer">
                                 ${ICONS.Play} 開始
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+    
+    if (state.mirrorPhase === 'review') {
+        const reviewQuestion = currentQuestion;
+        const existingAnswer = state.answers[reviewQuestion.q] || null;
+        
+        return `
+            <div class="mirror-container fixed inset-0 bg-slate-900">
+                <video id="mirror-video" class="mirror-video" autoplay playsinline></video>
+                <div class="mirror-overlay fixed inset-0 flex items-center justify-center p-4 overflow-y-auto">
+                    <div class="mirror-review-card neo-card w-full max-w-4xl p-6 sm:p-8 my-8 animate-fade-in">
+                        <!-- 質問表示（再確認用） -->
+                        <div class="mb-6 pb-6 border-b border-slate-200">
+                            <div class="flex items-center gap-2 mb-3">
+                                <span class="neo-chip text-slate-600">Q. ${reviewQuestion.no}</span>
+                                <span class="text-xs text-slate-500">質問 ${questionNumber} / ${totalQuestions}</span>
+                            </div>
+                            <h3 class="text-xl sm:text-2xl font-bold text-slate-800 leading-snug">${reviewQuestion.q}</h3>
+                        </div>
+                        
+                        <!-- AI回答作成セクション -->
+                        <div class="mb-6 pb-6 border-b border-slate-200">
+                            <div class="flex items-center gap-2 mb-4">
+                                <span class="text-purple-600">${ICONS.Sparkles}</span>
+                                <h4 class="font-bold text-lg text-slate-800">AIで回答案を作成</h4>
+                            </div>
+                            <div class="space-y-3">
+                                <textarea 
+                                    id="mirror-ai-answer-input"
+                                    class="w-full p-3 neo-card-inset rounded-lg h-32 focus:ring-2 focus:ring-purple-500 appearance-none text-sm"
+                                    placeholder="回答のメモ・キーワードを入力（例：結論：〇〇です&#10;理由：なぜなら〜&#10;具体例：例えば〜）">${state.mirrorReviewData.aiAnswerInput}</textarea>
+                                <p class="text-xs text-slate-400">※箇条書きやキーワードだけでOK。AIがPREP法に整えます。</p>
+                                ${state.mirrorReviewData.aiAnswerError ? `
+                                    <div class="neo-card-inset text-red-600 p-3 rounded-lg text-sm flex items-center gap-2">
+                                        ${ICONS.AlertCircle} ${state.mirrorReviewData.aiAnswerError}
+                                    </div>
+                                ` : ''}
+                                <button 
+                                    onclick="runAiAnswerGenerationForMirror()" 
+                                    ${state.mirrorReviewData.aiAnswerLoading ? 'disabled' : ''} 
+                                    class="w-full py-3 neo-btn-primary rounded-lg font-bold hover:opacity-90 transition-opacity flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer">
+                                    ${state.mirrorReviewData.aiAnswerLoading ? ICONS.Loader2 : ICONS.Sparkles} 
+                                    ${state.mirrorReviewData.aiAnswerLoading ? '生成中...' : 'AIで回答を作成する'}
+                                </button>
+                                ${existingAnswer ? `
+                                    <div class="mt-4 neo-card-inset p-4 rounded-lg">
+                                        <div class="text-xs font-bold text-slate-500 mb-2 flex items-center gap-2">
+                                            ${ICONS.BookOpen} 保存済み回答メモ
+                                        </div>
+                                        <div class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">${existingAnswer}</div>
+                                    </div>
+                                ` : ''}
+                            </div>
+                        </div>
+                        
+                        <!-- フィードバック入力セクション -->
+                        <div class="mb-6 pb-6 border-b border-slate-200">
+                            <div class="flex items-center gap-2 mb-4">
+                                <span class="text-blue-600">${ICONS.Edit}</span>
+                                <h4 class="font-bold text-lg text-slate-800">フィードバック</h4>
+                            </div>
+                            <div class="space-y-4">
+                                <div>
+                                    <label class="flex items-center gap-2 font-bold text-green-700 mb-2">
+                                        ${ICONS.CheckCircle} Good Point
+                                    </label>
+                                    <textarea 
+                                        id="mirror-fb-good"
+                                        class="w-full p-3 neo-card-inset rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent min-h-[80px] text-sm appearance-none"
+                                        placeholder="例：結論ファーストで分かりやすかった。">${state.mirrorReviewData.feedbackGood}</textarea>
+                                </div>
+                                <div>
+                                    <label class="flex items-center gap-2 font-bold text-orange-700 mb-2">
+                                        ${ICONS.AlertCircle} More / 改善点
+                                    </label>
+                                    <textarea 
+                                        id="mirror-fb-more"
+                                        class="w-full p-3 neo-card-inset rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent min-h-[80px] text-sm appearance-none"
+                                        placeholder="例：話が長すぎる。具体性に欠ける。">${state.mirrorReviewData.feedbackMore}</textarea>
+                                </div>
+                                <button 
+                                    onclick="saveMirrorFeedback()" 
+                                    class="w-full py-3 neo-btn-primary rounded-lg font-bold flex items-center justify-center gap-2 cursor-pointer">
+                                    ${ICONS.Save} フィードバックを保存
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <!-- アクションボタン -->
+                        <div class="flex flex-col sm:flex-row gap-3">
+                            <button onclick="retryMirrorQuestion()" class="flex-1 neo-btn px-6 py-3 font-bold text-slate-700 cursor-pointer flex items-center justify-center gap-2">
+                                ${ICONS.RefreshCw} もう一度挑戦
+                            </button>
+                            <button onclick="nextQuestion()" class="flex-1 neo-btn-primary px-6 py-3 font-bold cursor-pointer flex items-center justify-center gap-2">
+                                ${ICONS.ChevronDown} 次へ進む
                             </button>
                         </div>
                     </div>
@@ -1351,7 +1653,7 @@ function renderMirrorMode() {
                                 ${ICONS.CheckCircle}
                             </div>
                             <h2 class="text-2xl font-bold text-slate-800 mb-2">練習完了！</h2>
-                            <p class="text-slate-600">5問すべての練習が終わりました</p>
+                            <p class="text-slate-600">${state.mirrorQuestions.length}問すべての練習が終わりました</p>
                         </div>
                         <div class="flex flex-col gap-3">
                             <button onclick="restartMirrorMode()" class="neo-btn-primary w-full py-3 font-bold cursor-pointer">
@@ -1398,7 +1700,7 @@ function renderMirrorMode() {
                     <div class="mirror-timer-container relative mb-6">
                         <svg class="mirror-timer-circle" width="120" height="120">
                             <circle cx="60" cy="60" r="45" stroke="#e0e5ec" stroke-width="8" fill="none"/>
-                            <circle cx="60" cy="60" r="45" 
+                            <circle id="mirror-timer-circle" cx="60" cy="60" r="45" 
                                 stroke="${state.countdownTimer <= 5 ? '#ef4444' : state.countdownTimer <= 10 ? '#f59e0b' : '#4d7cff'}" 
                                 stroke-width="8" 
                                 fill="none"
@@ -1409,7 +1711,7 @@ function renderMirrorMode() {
                                 class="transition-all duration-300"/>
                         </svg>
                         <div class="absolute inset-0 flex items-center justify-center">
-                            <span class="text-3xl font-black ${state.countdownTimer <= 5 ? 'text-red-600' : state.countdownTimer <= 10 ? 'text-amber-600' : 'text-blue-600'}">
+                            <span id="mirror-timer-number" class="text-3xl font-black ${state.countdownTimer <= 5 ? 'text-red-600' : state.countdownTimer <= 10 ? 'text-amber-600' : 'text-blue-600'}">
                                 ${state.countdownTimer}
                             </span>
                         </div>
@@ -1441,6 +1743,91 @@ function renderMirrorMode() {
                 <button onclick="exitMirrorMode()" class="neo-btn mt-6 px-6 py-2 font-bold text-slate-600 cursor-pointer text-sm">
                     ${ICONS.X} 終了
                 </button>
+            </div>
+        </div>
+    `;
+}
+
+// 質問選択モーダル
+function renderMirrorSelectionModal() {
+    if (!state.mirrorSelectionModalOpen) return '';
+    
+    const allQuestions = state.categories.flatMap(cat => 
+        cat.questions.map(q => ({ ...q, categoryTitle: cat.title, categoryId: cat.id }))
+    );
+    
+    const selectedCount = state.mirrorSelectedQuestions.length;
+    
+    return `
+        <div class="fixed inset-0 z-[90] flex items-center justify-center p-4 modal-overlay animate-fade-in" onclick="closeMirrorSelectionModal()">
+            <div class="neo-modal w-full max-w-4xl max-h-[80vh] overflow-hidden flex flex-col" onclick="event.stopPropagation()">
+                <div class="neo-modal-header p-6 flex justify-between items-center shrink-0">
+                    <div>
+                        <h3 class="text-xl font-bold text-slate-800 flex items-center gap-2">
+                            ${ICONS.Target} 質問を選択
+                        </h3>
+                        <p class="text-sm text-slate-600 mt-1">練習したい質問を選択してください（${selectedCount}問選択中）</p>
+                    </div>
+                    <button onclick="closeMirrorSelectionModal()" class="neo-btn neo-close p-2 rounded-full">${ICONS.X}</button>
+                </div>
+                <div class="flex-1 overflow-y-auto custom-scrollbar p-6">
+                    <div class="space-y-4">
+                        ${state.categories.map(cat => `
+                            <div class="mb-6">
+                                <h4 class="font-bold text-slate-800 mb-3 flex items-center gap-2">
+                                    ${ICONS[cat.icon] || ICONS.Target}
+                                    ${cat.title}
+                                </h4>
+                                <div class="space-y-2">
+                                    ${cat.questions.map(q => {
+                                        const isSelected = state.mirrorSelectedQuestions.some(sq => sq.no === q.no);
+                                        return `
+                                            <button 
+                                                onclick="toggleMirrorQuestion(${cat.id}, '${q.no}')"
+                                                class="w-full text-left p-4 rounded-xl border-2 transition-all ${
+                                                    isSelected 
+                                                        ? 'border-blue-500 bg-blue-50 shadow-md' 
+                                                        : 'border-slate-200 hover:border-blue-300 hover:bg-slate-50'
+                                                } cursor-pointer">
+                                                <div class="flex items-start gap-3">
+                                                    <div class="shrink-0 mt-1">
+                                                        ${isSelected ? `
+                                                            <div class="w-6 h-6 rounded-full bg-blue-500 flex items-center justify-center">
+                                                                <span class="text-white text-xs font-bold">✓</span>
+                                                            </div>
+                                                        ` : `
+                                                            <div class="w-6 h-6 rounded-full border-2 border-slate-300"></div>
+                                                        `}
+                                                    </div>
+                                                    <div class="flex-1">
+                                                        <div class="flex items-center gap-2 mb-1">
+                                                            <span class="text-xs font-bold text-slate-500">${q.no}</span>
+                                                            ${q.important ? '<span class="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded">最重要</span>' : ''}
+                                                        </div>
+                                                        <p class="font-bold text-slate-800 text-sm">${q.q}</p>
+                                                    </div>
+                                                </div>
+                                            </button>
+                                        `;
+                                    }).join('')}
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+                <div class="p-6 neo-card-inset flex justify-between items-center shrink-0">
+                    <div class="text-sm text-slate-600">
+                        <span class="font-bold">${selectedCount}問</span> 選択中
+                    </div>
+                    <div class="flex gap-3">
+                        <button onclick="closeMirrorSelectionModal()" class="neo-btn px-6 py-3 font-bold text-slate-700 cursor-pointer">
+                            キャンセル
+                        </button>
+                        <button onclick="startManualMirrorMode()" ${selectedCount === 0 ? 'disabled' : ''} class="neo-btn-primary px-8 py-3 font-bold cursor-pointer ${selectedCount === 0 ? 'opacity-50 cursor-not-allowed' : ''}">
+                            ${ICONS.Play} 開始 (${selectedCount}問)
+                        </button>
+                    </div>
+                </div>
             </div>
         </div>
     `;
