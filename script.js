@@ -1376,6 +1376,28 @@ window.exitMirrorMode = () => {
     renderApp();
 };
 
+// タイマー表示のみ更新（質問BOXは再レンダリングしない）
+function updateTimerDisplay() {
+    const timerElement = document.getElementById('mirror-timer-number');
+    const timerCircle = document.getElementById('mirror-timer-circle');
+    
+    if (!timerElement || !timerCircle) return; // 要素が存在しない場合は何もしない
+    
+    const progress = state.countdownTimer / 20;
+    const circumference = 2 * Math.PI * 45;
+    const offset = circumference * (1 - progress);
+    
+    // タイマー数字を更新
+    timerElement.textContent = state.countdownTimer;
+    const colorClass = state.countdownTimer <= 5 ? 'text-red-600' : state.countdownTimer <= 10 ? 'text-amber-600' : 'text-blue-600';
+    timerElement.className = `text-3xl font-black ${colorClass}`;
+    
+    // 円形プログレスバーを更新
+    const color = state.countdownTimer <= 5 ? '#ef4444' : state.countdownTimer <= 10 ? '#f59e0b' : '#4d7cff';
+    timerCircle.setAttribute('stroke', color);
+    timerCircle.setAttribute('stroke-dashoffset', offset);
+}
+
 // カウントダウン開始
 function startCountdown() {
     if (state.countdownInterval) {
@@ -1383,7 +1405,14 @@ function startCountdown() {
     }
     state.countdownActive = true;
     state.countdownTimer = 20;
-    updateTimerDisplay(); // 初期表示
+    
+    // 初期表示はrenderApp()で行う
+    renderApp();
+    
+    // 少し遅延してからタイマー更新を開始（DOM要素が確実に存在するように）
+    setTimeout(() => {
+        updateTimerDisplay();
+    }, 100);
     
     state.countdownInterval = setInterval(() => {
         state.countdownTimer--;
