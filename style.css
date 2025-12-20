@@ -179,8 +179,20 @@ button:active { transform: scale(0.98); transition: transform 0.05s; }
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
     padding: 1rem;
+    overflow: hidden;
+}
+
+.mirror-content-area {
+    width: 100%;
+    max-width: 48rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    min-height: 0;
+    padding-bottom: 5rem; /* リアルタイム文字起こし表示のスペースを確保 */
 }
 
 .mirror-question-card {
@@ -195,6 +207,7 @@ button:active { transform: scale(0.98); transition: transform 0.05s; }
     display: flex;
     align-items: center;
     justify-content: center;
+    flex-shrink: 0;
 }
 
 .mirror-timer-circle {
@@ -204,9 +217,10 @@ button:active { transform: scale(0.98); transition: transform 0.05s; }
 .mirror-cheatsheet {
     background: rgba(224, 229, 236, 0.92);
     backdrop-filter: blur(8px);
-    max-height: 40vh;
+    max-height: 30vh;
     overflow-y: auto;
     animation: fadeIn 0.3s ease-out;
+    flex-shrink: 0;
 }
 
 /* ミラーモード用アニメーション */
@@ -250,6 +264,37 @@ button:active { transform: scale(0.98); transition: transform 0.05s; }
 
 .speech-recording-indicator {
     animation: pulse-red 1s ease-in-out infinite;
+}
+
+/* リアルタイム文字起こし表示 */
+.mirror-live-transcription {
+    animation: fadeIn 0.3s ease-out;
+    max-height: 30vh;
+    overflow-y: auto;
+}
+
+.mirror-live-transcription p {
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+    word-break: break-word;
+}
+
+/* スクロールバーのスタイル（半透明表示用） */
+.mirror-live-transcription::-webkit-scrollbar {
+    width: 6px;
+}
+
+.mirror-live-transcription::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+}
+
+.mirror-live-transcription::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.3);
+    border-radius: 3px;
+}
+
+.mirror-live-transcription::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.5);
 }
 
 /* レスポンシブ対応 */

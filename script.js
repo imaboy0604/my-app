@@ -1328,24 +1328,56 @@ function initSpeechRecognition() {
             }
         }
         
+        // 質問フェーズ中はリアルタイム表示を更新（DOM直接操作で高速化）
+        if (state.mirrorMode && state.mirrorPhase === 'question' && state.countdownActive) {
+            const liveTextElement = document.getElementById('mirror-live-transcription');
+            if (liveTextElement) {
+                const displayText = state.speechRecognition.transcribedText + interimText;
+                liveTextElement.textContent = displayText;
+                // テキストがある場合は表示、ない場合は非表示
+                if (displayText.trim()) {
+                    liveTextElement.style.display = 'block';
+                } else {
+                    liveTextElement.style.display = 'none';
+                }
+            }
+        }
+        
         renderApp();
     };
     
     recognition.onerror = (event) => {
         console.error('Speech recognition error:', event.error);
-        state.speechRecognition.isActive = false;
         
-        let errorMessage = '音声認識エラーが発生しました';
-        if (event.error === 'not-allowed') {
-            errorMessage = 'マイクの権限が拒否されました。ブラウザの設定でマイクへのアクセスを許可してください。';
-        } else if (event.error === 'no-speech') {
-            errorMessage = '音声が検出されませんでした。';
-        } else if (event.error === 'network') {
-            errorMessage = 'ネットワークエラーが発生しました。';
+        // no-speechエラーは無視（無音状態は正常）
+        if (event.error === 'no-speech') {
+            // 無音状態はエラーとして扱わない
+            return;
         }
         
-        state.speechRecognition.errorMessage = errorMessage;
-        renderApp();
+        state.speechRecognition.isActive = false;
+        
+        let errorMessage = '';
+        if (event.error === 'not-allowed') {
+            errorMessage = 'マイクの権限が拒否されました。ブラウザの設定でマイクへのアクセスを許可してください。';
+        } else if (event.error === 'network') {
+            errorMessage = 'ネットワークエラーが発生しました。インターネット接続を確認してください。';
+        } else if (event.error === 'aborted') {
+            // 手動で停止した場合はエラーとして表示しない
+            return;
+        } else if (event.error === 'audio-capture') {
+            errorMessage = 'マイクが検出されませんでした。マイクが接続されているか確認してください。';
+        } else if (event.error === 'service-not-allowed') {
+            errorMessage = '音声認識サービスが利用できません。HTTPS接続でアクセスしているか確認してください。';
+        } else {
+            errorMessage = `音声認識エラー: ${event.error}`;
+        }
+        
+        // エラーメッセージがある場合のみ表示
+        if (errorMessage) {
+            state.speechRecognition.errorMessage = errorMessage;
+            renderApp();
+        }
     };
     
     recognition.onend = () => {
@@ -1392,9 +1424,9 @@ window.startSpeechRecognition = () => {
             state.speechRecognition.isActive = true;
             renderApp();
         } else {
-            alert('音声認識を開始できませんでした。マイクの権限を確認してください。');
+            // エラーメッセージを設定（アラートは表示しない）
             state.speechRecognition.isActive = false;
-            state.speechRecognition.errorMessage = 'マイクの権限を確認してください。';
+            state.speechRecognition.errorMessage = '音声認識を開始できませんでした。マイクの権限を確認してください。';
             renderApp();
         }
     }
@@ -1660,8 +1692,15 @@ function startCountdown() {
                     }
                 } catch (e) {
                     // 既に開始されている場合は無視
-                    if (e.name !== 'InvalidStateError') {
+                    if (e.name === 'InvalidStateError') {
+                        // 既に開始されている場合は状態を更新
+                        state.speechRecognition.isActive = true;
+                        renderApp();
+                    } else {
                         console.warn('音声認識の自動開始に失敗:', e);
+                        // エラーメッセージを設定
+                        state.speechRecognition.errorMessage = '音声認識の自動開始に失敗しました。手動で開始してください。';
+                        renderApp();
                     }
                 }
             }
@@ -2042,79 +2081,105 @@ function renderMirrorMode() {
     }
     
     // 質問表示中
+    const liveTranscriptionText = state.speechRecognition.transcribedText + state.speechRecognition.interimText;
+    
     return `
         <div class="mirror-container fixed inset-0 bg-slate-900">
             <video id="mirror-video" class="mirror-video" autoplay playsinline></video>
-            <div class="mirror-overlay fixed inset-0 flex flex-col items-center justify-center p-4">
-                <!-- 質問カード -->
-                <div class="mirror-question-card neo-card w-full max-w-3xl p-6 sm:p-8 mb-6 animate-fade-in">
-                    <div class="flex items-center justify-between mb-4">
-                        <div class="flex items-center gap-3">
-                            <div class="neo-btn neo-card-inset p-3 rounded-xl text-purple-600">
-                                ${ICONS.User}
-                            </div>
-                            <div>
-                                <div class="text-xs font-bold text-slate-500 mb-1">質問 ${questionNumber} / ${totalQuestions}</div>
-                                <h3 class="text-xl sm:text-2xl font-bold text-slate-800 leading-snug">${currentQuestion.q}</h3>
+            <div class="mirror-overlay fixed inset-0 flex flex-col items-center p-4 overflow-hidden">
+                <!-- リアルタイム文字起こし表示（半透明） -->
+                ${state.countdownActive && liveTranscriptionText ? `
+                    <div id="mirror-live-transcription" class="mirror-live-transcription fixed bottom-20 left-0 right-0 px-4 z-30 pointer-events-none">
+                        <div class="max-w-4xl mx-auto">
+                            <div class="bg-black/60 backdrop-blur-md rounded-2xl p-4 sm:p-6 border border-white/20">
+                                <p class="text-white text-base sm:text-lg leading-relaxed whitespace-pre-wrap font-medium">
+                                    ${liveTranscriptionText}
+                                </p>
                             </div>
                         </div>
+                    </div>
+                ` : `
+                    <div id="mirror-live-transcription" class="mirror-live-transcription fixed bottom-20 left-0 right-0 px-4 z-30 pointer-events-none" style="display: none;">
+                        <div class="max-w-4xl mx-auto">
+                            <div class="bg-black/60 backdrop-blur-md rounded-2xl p-4 sm:p-6 border border-white/20">
+                                <p class="text-white text-base sm:text-lg leading-relaxed whitespace-pre-wrap font-medium"></p>
+                            </div>
+                        </div>
+                    </div>
+                `}
+                
+                <!-- コンテンツエリア（中央配置、画面内に収まるように） -->
+                <div class="mirror-content-area w-full max-w-3xl flex flex-col items-center justify-center flex-1 min-h-0">
+                    <!-- 質問カード -->
+                    <div class="mirror-question-card neo-card w-full p-6 sm:p-8 mb-4 sm:mb-6 animate-fade-in flex-shrink-0">
+                        <div class="flex items-center justify-between mb-4">
+                            <div class="flex items-center gap-3">
+                                <div class="neo-btn neo-card-inset p-3 rounded-xl text-purple-600">
+                                    ${ICONS.User}
+                                </div>
+                                <div>
+                                    <div class="text-xs font-bold text-slate-500 mb-1">質問 ${questionNumber} / ${totalQuestions}</div>
+                                    <h3 class="text-xl sm:text-2xl font-bold text-slate-800 leading-snug">${currentQuestion.q}</h3>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        ${!state.countdownActive ? `
+                            <button onclick="startAnswer()" class="neo-btn-primary w-full py-4 font-bold text-lg cursor-pointer mt-4">
+                                ${ICONS.Play} 回答開始
+                            </button>
+                        ` : ''}
                     </div>
                     
-                    ${!state.countdownActive ? `
-                        <button onclick="startAnswer()" class="neo-btn-primary w-full py-4 font-bold text-lg cursor-pointer mt-4">
-                            ${ICONS.Play} 回答開始
+                    <!-- タイマー -->
+                    ${state.countdownActive ? `
+                        <div class="mirror-timer-container relative flex-shrink-0">
+                            <svg class="mirror-timer-circle" width="120" height="120">
+                                <circle cx="60" cy="60" r="45" stroke="#e0e5ec" stroke-width="8" fill="none"/>
+                                <circle id="mirror-timer-circle" cx="60" cy="60" r="45" 
+                                    stroke="${state.countdownTimer <= 5 ? '#ef4444' : state.countdownTimer <= 10 ? '#f59e0b' : '#4d7cff'}" 
+                                    stroke-width="8" 
+                                    fill="none"
+                                    stroke-dasharray="${circumference}"
+                                    stroke-dashoffset="${offset}"
+                                    stroke-linecap="round"
+                                    transform="rotate(-90 60 60)"
+                                    class="transition-all duration-300"/>
+                            </svg>
+                            <div class="absolute inset-0 flex items-center justify-center">
+                                <span id="mirror-timer-number" class="text-3xl font-black ${state.countdownTimer <= 5 ? 'text-red-600' : state.countdownTimer <= 10 ? 'text-amber-600' : 'text-blue-600'}">
+                                    ${state.countdownTimer}
+                                </span>
+                            </div>
+                        </div>
+                    ` : ''}
+                    
+                    <!-- カンペボタン -->
+                    ${state.countdownActive && answerMemo ? `
+                        <button 
+                            onmousedown="handleCheatSheetStart(event)"
+                            onmouseup="handleCheatSheetEnd()"
+                            onmouseleave="handleCheatSheetEnd()"
+                            ontouchstart="handleCheatSheetStart(event)"
+                            ontouchend="handleCheatSheetEnd()"
+                            class="neo-btn px-6 py-3 font-bold text-slate-700 cursor-pointer mt-4 flex-shrink-0">
+                            ${ICONS.BookOpen} 回答ヒント（長押し）
                         </button>
                     ` : ''}
-                </div>
-                
-                <!-- タイマー -->
-                ${state.countdownActive ? `
-                    <div class="mirror-timer-container relative mb-6">
-                        <svg class="mirror-timer-circle" width="120" height="120">
-                            <circle cx="60" cy="60" r="45" stroke="#e0e5ec" stroke-width="8" fill="none"/>
-                            <circle id="mirror-timer-circle" cx="60" cy="60" r="45" 
-                                stroke="${state.countdownTimer <= 5 ? '#ef4444' : state.countdownTimer <= 10 ? '#f59e0b' : '#4d7cff'}" 
-                                stroke-width="8" 
-                                fill="none"
-                                stroke-dasharray="${circumference}"
-                                stroke-dashoffset="${offset}"
-                                stroke-linecap="round"
-                                transform="rotate(-90 60 60)"
-                                class="transition-all duration-300"/>
-                        </svg>
-                        <div class="absolute inset-0 flex items-center justify-center">
-                            <span id="mirror-timer-number" class="text-3xl font-black ${state.countdownTimer <= 5 ? 'text-red-600' : state.countdownTimer <= 10 ? 'text-amber-600' : 'text-blue-600'}">
-                                ${state.countdownTimer}
-                            </span>
+                    
+                    <!-- カンペ表示 -->
+                    ${state.showCheatSheet && answerMemo ? `
+                        <div class="mirror-cheatsheet neo-card-inset w-full p-6 mt-4 animate-fade-in flex-shrink-0">
+                            <div class="text-xs font-bold text-slate-500 mb-2">回答メモ</div>
+                            <div class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap opacity-80">${answerMemo}</div>
                         </div>
-                    </div>
-                ` : ''}
-                
-                <!-- カンペボタン -->
-                ${state.countdownActive && answerMemo ? `
-                    <button 
-                        onmousedown="handleCheatSheetStart(event)"
-                        onmouseup="handleCheatSheetEnd()"
-                        onmouseleave="handleCheatSheetEnd()"
-                        ontouchstart="handleCheatSheetStart(event)"
-                        ontouchend="handleCheatSheetEnd()"
-                        class="neo-btn px-6 py-3 font-bold text-slate-700 cursor-pointer">
-                        ${ICONS.BookOpen} 回答ヒント（長押し）
+                    ` : ''}
+                    
+                    <!-- 終了ボタン -->
+                    <button onclick="exitMirrorMode()" class="neo-btn mt-6 px-6 py-2 font-bold text-slate-600 cursor-pointer text-sm flex-shrink-0">
+                        ${ICONS.X} 終了
                     </button>
-                ` : ''}
-                
-                <!-- カンペ表示 -->
-                ${state.showCheatSheet && answerMemo ? `
-                    <div class="mirror-cheatsheet neo-card-inset w-full max-w-3xl p-6 mt-4 animate-fade-in">
-                        <div class="text-xs font-bold text-slate-500 mb-2">回答メモ</div>
-                        <div class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap opacity-80">${answerMemo}</div>
-                    </div>
-                ` : ''}
-                
-                <!-- 終了ボタン -->
-                <button onclick="exitMirrorMode()" class="neo-btn mt-6 px-6 py-2 font-bold text-slate-600 cursor-pointer text-sm">
-                    ${ICONS.X} 終了
-                </button>
+                </div>
             </div>
         </div>
     `;
