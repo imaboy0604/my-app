@@ -151,7 +151,8 @@ const state = {
         aiAnswerLoading: false,
         aiAnswerError: null,
         feedbackGood: '',
-        feedbackMore: ''
+        feedbackMore: '',
+        speechTranscription: '' // 文字起こし結果
     },
     speechRecognition: {
         isActive: false,
@@ -529,10 +530,17 @@ function renderCategoryModal() {
                         ${cat.questions.map((q) => {
                             const fb = state.feedback[q.no];
                             const hasFb = fb && (fb.good || fb.advice);
+                            const hasAnswer = state.answers[q.q] && state.answers[q.q].trim().length > 0;
+                            const badgePositions = [];
+                            if (q.important) badgePositions.push('right-0');
+                            if (hasFb) badgePositions.push(q.important ? 'right-28' : 'right-0');
+                            if (!hasAnswer) badgePositions.push(hasFb ? (q.important ? 'right-56' : 'right-28') : (q.important ? 'right-28' : 'right-0'));
+                            
                             return `
                                 <div onclick="openQuestion('${q.no}')" class="group relative bg-white p-5 rounded-xl border-2 transition-all hover:shadow-lg cursor-pointer active:scale-[0.99] ${q.important ? 'border-red-100 ring-1 ring-red-100' : 'border-slate-100 hover:border-blue-200'}">
                                     ${q.important ? '<span class="absolute -top-3 -right-3 bg-red-500 text-white text-xs font-bold px-3 py-1 rounded-full shadow-sm z-10">最重要</span>' : ''}
-                                    ${hasFb ? `<span class="absolute -top-3 right-16 bg-green-500 text-white text-xs font-bold px-3 py-1 rounded-full shadow-sm flex items-center gap-1 z-10"><span class="w-3 h-3">${ICONS.CheckCircle}</span> 評価済</span>` : ''}
+                                    ${hasFb ? `<span class="absolute -top-3 ${q.important ? 'right-28' : '-right-3'} bg-green-500 text-white text-xs font-bold px-3 py-1 rounded-full shadow-sm flex items-center gap-1 z-10"><span class="w-3 h-3">${ICONS.CheckCircle}</span> 評価済</span>` : ''}
+                                    ${!hasAnswer ? `<span class="absolute -top-3 ${hasFb ? (q.important ? 'right-56' : 'right-28') : (q.important ? 'right-28' : '-right-3')} bg-orange-500 text-white text-xs font-bold px-3 py-1 rounded-full shadow-sm z-10">回答未記入</span>` : ''}
                                     <div class="flex gap-4 items-start">
                                         <div class="shrink-0 w-10 h-10 flex items-center justify-center rounded-lg font-bold text-sm ${q.important ? 'bg-red-50 text-red-600' : 'bg-slate-100 text-slate-500'}">${q.no}</div>
                                         <div class="flex-1">
@@ -979,16 +987,46 @@ window.runAiAnswerGeneration = async () => {
     }
 };
 
+// 回答有無チェック関数
+function hasAnswer(questionText) {
+    const answer = state.answers[questionText];
+    return answer && answer.trim().length > 0;
+}
+
 // ミラーモード用AI回答生成
 window.runAiAnswerGenerationForMirror = async () => {
     const currentQuestion = state.mirrorQuestions[state.currentQuestionIndex];
     const questionText = currentQuestion.q;
-    const userInput = document.getElementById('mirror-ai-answer-input').value;
+    const hasExistingAnswer = hasAnswer(questionText);
+    const speechText = state.mirrorReviewData.speechTranscription || '';
+    
+    // テキストボックスから取得（手動入力 or 音声認識結果）
+    let userInput = document.getElementById('mirror-ai-answer-input').value.trim();
+
+    // 入力が空の場合は音声認識結果を使用
+    if (!userInput && speechText) {
+        userInput = speechText;
+        // テキストボックスにもセット
+        document.getElementById('mirror-ai-answer-input').value = speechText;
+    }
 
     if (!userInput) {
-        state.mirrorReviewData.aiAnswerError = "回答のメモを入力してください";
+        state.mirrorReviewData.aiAnswerError = "回答のメモを入力するか、音声認識結果を使用してください";
         renderApp();
         return;
+    }
+
+    // 回答済みの質問で、音声認識結果のみの場合は確認
+    if (hasExistingAnswer && userInput === speechText && speechText) {
+        const confirmMessage = `既存の回答があります。\n\n既存回答:\n${state.answers[questionText].substring(0, 100)}...\n\n音声認識結果で上書きしますか？\n（キャンセルすると既存回答を保持します）`;
+        const shouldOverwrite = confirm(confirmMessage);
+        if (!shouldOverwrite) {
+            // 既存回答をテキストボックスに表示
+            document.getElementById('mirror-ai-answer-input').value = state.answers[questionText];
+            state.mirrorReviewData.aiAnswerInput = state.answers[questionText];
+            renderApp();
+            return;
+        }
     }
 
     state.mirrorReviewData.aiAnswerLoading = true;
@@ -1032,6 +1070,7 @@ window.runAiAnswerGenerationForMirror = async () => {
         // 保存
         saveAnswer(questionText, answerText);
         state.mirrorReviewData.aiAnswerInput = '';
+        state.mirrorReviewData.speechTranscription = ''; // 使用後はクリア
         renderApp();
 
     } catch (e) {
@@ -1280,10 +1319,13 @@ function initSpeechRecognition() {
         state.speechRecognition.transcribedText = previousFinal + finalText;
         state.speechRecognition.interimText = interimText;
         
-        // テキストボックスに自動入力（確定テキスト + 途中テキスト）
-        const inputElement = document.getElementById('mirror-ai-answer-input');
-        if (inputElement) {
-            inputElement.value = state.speechRecognition.transcribedText + interimText;
+        // ミラーモードのレビューフェーズの場合のみテキストボックスに自動入力
+        if (state.mirrorMode && state.mirrorPhase === 'review') {
+            const inputElement = document.getElementById('mirror-ai-answer-input');
+            if (inputElement) {
+                // レビューフェーズでは確定テキスト + 途中テキストを表示
+                inputElement.value = state.speechRecognition.transcribedText + interimText;
+            }
         }
         
         renderApp();
@@ -1598,6 +1640,34 @@ function startCountdown() {
         updateTimerDisplay();
     }, 100);
     
+    // カウントダウン開始と同時に音声認識を自動開始
+    if (window.SpeechRecognition || window.webkitSpeechRecognition) {
+        setTimeout(() => {
+            if (!state.speechRecognition.isActive) {
+                // 音声認識が初期化されていない場合は初期化
+                if (!state.speechRecognition.recognition) {
+                    initSpeechRecognition();
+                }
+                // 音声認識を開始
+                try {
+                    if (state.speechRecognition.recognition) {
+                        state.speechRecognition.recognition.start();
+                        state.speechRecognition.isActive = true;
+                        state.speechRecognition.transcribedText = '';
+                        state.speechRecognition.interimText = '';
+                        state.speechRecognition.errorMessage = null;
+                        renderApp();
+                    }
+                } catch (e) {
+                    // 既に開始されている場合は無視
+                    if (e.name !== 'InvalidStateError') {
+                        console.warn('音声認識の自動開始に失敗:', e);
+                    }
+                }
+            }
+        }, 500); // UI更新を待つ
+    }
+    
     state.countdownInterval = setInterval(() => {
         state.countdownTimer--;
         updateTimerDisplay(); // タイマー部分だけ更新（質問BOXは点滅しない）
@@ -1606,10 +1676,16 @@ function startCountdown() {
             clearInterval(state.countdownInterval);
             state.countdownInterval = null;
             state.countdownActive = false;
+            // 音声認識を停止
+            if (state.speechRecognition.recognition && state.speechRecognition.isActive) {
+                stopSpeechRecognition();
+            }
             // 自動で次の質問へ進まず、レビューフェーズへ
             const currentQuestion = state.mirrorQuestions[state.currentQuestionIndex];
             state.mirrorPhase = 'review';
             state.mirrorReviewData.currentQuestionNo = currentQuestion.no;
+            // 文字起こし結果を保存
+            state.mirrorReviewData.speechTranscription = state.speechRecognition.transcribedText || '';
             // 既存のフィードバックがあれば読み込む
             const existingFb = state.feedback[currentQuestion.no] || {};
             state.mirrorReviewData.feedbackGood = existingFb.good || '';
@@ -1699,6 +1775,10 @@ window.retryMirrorQuestion = () => {
     if (state.speechRecognition.recognition && state.speechRecognition.isActive) {
         stopSpeechRecognition();
     }
+    // 文字起こし結果をリセット（再挑戦時は新しい録音を開始）
+    state.speechRecognition.transcribedText = '';
+    state.speechRecognition.interimText = '';
+    state.mirrorReviewData.speechTranscription = '';
     state.mirrorPhase = 'question';
     state.countdownTimer = 20;
     state.countdownActive = false;
@@ -1769,6 +1849,10 @@ function renderMirrorMode() {
     if (state.mirrorPhase === 'review') {
         const reviewQuestion = currentQuestion;
         const existingAnswer = state.answers[reviewQuestion.q] || null;
+        const hasExistingAnswer = hasAnswer(reviewQuestion.q);
+        const speechText = state.mirrorReviewData.speechTranscription || '';
+        // テキストボックスの初期値：音声認識結果があればそれを使用、なければ空
+        const initialInputValue = speechText || state.mirrorReviewData.aiAnswerInput || '';
         
         return `
             <div class="mirror-container fixed inset-0 bg-slate-900">
@@ -1780,6 +1864,7 @@ function renderMirrorMode() {
                             <div class="flex items-center gap-2 mb-3">
                                 <span class="neo-chip text-slate-600">Q. ${reviewQuestion.no}</span>
                                 <span class="text-xs text-slate-500">質問 ${questionNumber} / ${totalQuestions}</span>
+                                ${!hasExistingAnswer ? '<span class="text-xs bg-orange-100 text-orange-600 px-2 py-0.5 rounded">回答未記入</span>' : ''}
                             </div>
                             <h3 class="text-xl sm:text-2xl font-bold text-slate-800 leading-snug">${reviewQuestion.q}</h3>
                         </div>
@@ -1790,12 +1875,25 @@ function renderMirrorMode() {
                                 <span class="text-purple-600">${ICONS.Sparkles}</span>
                                 <h4 class="font-bold text-lg text-slate-800">AIで回答案を作成</h4>
                             </div>
+                            ${speechText ? `
+                                <div class="mb-3 neo-card-inset p-3 rounded-lg bg-blue-50 border border-blue-200">
+                                    <div class="text-xs font-bold text-blue-700 mb-1 flex items-center gap-2">
+                                        ${ICONS.BookOpen} 音声認識結果
+                                    </div>
+                                    <div class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">${speechText}</div>
+                                    ${!hasExistingAnswer ? `
+                                        <p class="text-xs text-blue-600 mt-2">この内容をAI回答生成に使用できます</p>
+                                    ` : `
+                                        <p class="text-xs text-orange-600 mt-2">既存回答があります。ブラッシュアップ用として使用できます</p>
+                                    `}
+                                </div>
+                            ` : ''}
                             <div class="space-y-3">
                                 <textarea 
                                     id="mirror-ai-answer-input"
                                     class="w-full p-3 neo-card-inset rounded-lg h-32 focus:ring-2 focus:ring-purple-500 appearance-none text-sm"
-                                    placeholder="回答のメモ・キーワードを入力（例：結論：〇〇です&#10;理由：なぜなら〜&#10;具体例：例えば〜）">${state.mirrorReviewData.aiAnswerInput}</textarea>
-                                <p class="text-xs text-slate-400">※箇条書きやキーワードだけでOK。AIがPREP法に整えます。</p>
+                                    placeholder="回答のメモ・キーワードを入力（例：結論：〇〇です&#10;理由：なぜなら〜&#10;具体例：例えば〜）">${initialInputValue}</textarea>
+                                <p class="text-xs text-slate-400">※箇条書きやキーワードだけでOK。AIがPREP法に整えます。${speechText ? '音声認識結果が自動入力されています。' : ''}</p>
                                 
                                 <!-- 音声認識ボタン -->
                                 ${(window.SpeechRecognition || window.webkitSpeechRecognition) ? `
@@ -2055,10 +2153,11 @@ function renderMirrorSelectionModal() {
                                 <div class="space-y-2">
                                     ${cat.questions.map(q => {
                                         const isSelected = state.mirrorSelectedQuestions.some(sq => sq.no === q.no);
+                                        const hasAnswer = state.answers[q.q] && state.answers[q.q].trim().length > 0;
                                         return `
                                             <button 
                                                 onclick="toggleMirrorQuestion(${cat.id}, '${q.no}')"
-                                                class="w-full text-left p-4 rounded-xl border-2 transition-all ${
+                                                class="w-full text-left p-4 rounded-xl border-2 transition-all relative ${
                                                     isSelected 
                                                         ? 'border-blue-500 bg-blue-50 shadow-md' 
                                                         : 'border-slate-200 hover:border-blue-300 hover:bg-slate-50'
@@ -2077,6 +2176,7 @@ function renderMirrorSelectionModal() {
                                                         <div class="flex items-center gap-2 mb-1">
                                                             <span class="text-xs font-bold text-slate-500">${q.no}</span>
                                                             ${q.important ? '<span class="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded">最重要</span>' : ''}
+                                                            ${!hasAnswer ? '<span class="text-xs bg-orange-100 text-orange-600 px-2 py-0.5 rounded">回答未記入</span>' : ''}
                                                         </div>
                                                         <p class="font-bold text-slate-800 text-sm">${q.q}</p>
                                                     </div>
