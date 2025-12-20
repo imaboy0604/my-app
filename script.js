@@ -1179,7 +1179,8 @@ window.runAiAnswerGenerationForMirror = async () => {
     const currentQuestion = state.mirrorQuestions[state.currentQuestionIndex];
     const questionText = currentQuestion.q;
     const hasExistingAnswer = hasAnswer(questionText);
-    const speechText = state.mirrorReviewData.speechTranscription || '';
+    // 音声認識結果は無効化中
+    // const speechText = state.mirrorReviewData.speechTranscription || '';
     
     // テキストボックスから取得（手動入力のみ、音声認識は無効化中）
     let userInput = document.getElementById('mirror-ai-answer-input').value.trim();
@@ -1904,8 +1905,8 @@ function startCountdown() {
             const currentQuestion = state.mirrorQuestions[state.currentQuestionIndex];
             state.mirrorPhase = 'review';
             state.mirrorReviewData.currentQuestionNo = currentQuestion.no;
-            // 文字起こし結果を保存
-            state.mirrorReviewData.speechTranscription = state.speechRecognition.transcribedText || '';
+            // 文字起こし結果を保存（無効化中）
+            state.mirrorReviewData.speechTranscription = '';
             // 既存のフィードバックがあれば読み込む
             const existingFb = state.feedback[currentQuestion.no] || {};
             state.mirrorReviewData.feedbackGood = existingFb.good || '';
@@ -2070,9 +2071,10 @@ function renderMirrorMode() {
         const reviewQuestion = currentQuestion;
         const existingAnswer = state.answers[reviewQuestion.q] || null;
         const hasExistingAnswer = hasAnswer(reviewQuestion.q);
-        const speechText = state.mirrorReviewData.speechTranscription || '';
-        // テキストボックスの初期値：音声認識結果があればそれを使用、なければ空
-        const initialInputValue = speechText || state.mirrorReviewData.aiAnswerInput || '';
+        // 音声認識結果は無効化中（常に空文字列）
+        // const speechText = state.mirrorReviewData.speechTranscription || '';
+        // テキストボックスの初期値：既存の入力値があればそれを使用、なければ空
+        const initialInputValue = state.mirrorReviewData.aiAnswerInput || '';
         
         return `
             <div class="mirror-container fixed inset-0 bg-slate-900">
@@ -2263,33 +2265,12 @@ function renderMirrorMode() {
     }
     
     // 質問表示中
-    // リアルタイム文字起こし表示（無効化中）
-    // const liveTranscriptionText = state.speechRecognition.transcribedText + state.speechRecognition.interimText;
+    // リアルタイム文字起こし表示（無効化中 - 完全に削除）
     
     return `
         <div class="mirror-container fixed inset-0 bg-slate-900">
             <video id="mirror-video" class="mirror-video" autoplay playsinline></video>
             <div class="mirror-overlay fixed inset-0 flex flex-col items-center p-4 overflow-hidden">
-                <!-- リアルタイム文字起こし表示（無効化中） -->
-                <!-- ${state.countdownActive && liveTranscriptionText ? `
-                    <div id="mirror-live-transcription" class="mirror-live-transcription fixed bottom-20 left-0 right-0 px-4 z-30 pointer-events-none">
-                        <div class="max-w-4xl mx-auto">
-                            <div class="bg-black/60 backdrop-blur-md rounded-2xl p-4 sm:p-6 border border-white/20">
-                                <p class="text-white text-base sm:text-lg leading-relaxed whitespace-pre-wrap font-medium">
-                                    ${liveTranscriptionText}
-                                </p>
-                            </div>
-                        </div>
-                    </div>
-                ` : `
-                    <div id="mirror-live-transcription" class="mirror-live-transcription fixed bottom-20 left-0 right-0 px-4 z-30 pointer-events-none" style="display: none;">
-                        <div class="max-w-4xl mx-auto">
-                            <div class="bg-black/60 backdrop-blur-md rounded-2xl p-4 sm:p-6 border border-white/20">
-                                <p class="text-white text-base sm:text-lg leading-relaxed whitespace-pre-wrap font-medium"></p>
-                            </div>
-                        </div>
-                    </div>
-                `} -->
                 
                 <!-- コンテンツエリア（中央配置、画面内に収まるように） -->
                 <div class="mirror-content-area w-full max-w-3xl flex flex-col items-center justify-center flex-1 min-h-0">
