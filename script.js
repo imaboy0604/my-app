@@ -131,7 +131,17 @@ const state = {
     aiAnswerModal: { isOpen: false, questionText: "", qNo: null },
     bulkAnswerModal: { isOpen: false }, // 未回答一覧モーダル用
     errorLog: "",
-    isLoadingSettings: false
+    isLoadingSettings: false,
+    // ミラーモード用
+    mirrorMode: false,
+    mirrorQuestions: [],
+    currentQuestionIndex: 0,
+    countdownTimer: 20,
+    countdownActive: false,
+    countdownInterval: null,
+    cameraStream: null,
+    showCheatSheet: false,
+    mirrorPhase: 'waiting' // 'waiting', 'ready', 'question', 'complete'
 };
 
 // --- 初期化チェック ---
@@ -216,6 +226,25 @@ function renderStrategy() {
                 <div class="flex flex-wrap gap-2">
                     ${STRATEGY_ADVICE.highlights.map(tag => `<span class="neo-chip">#${tag}</span>`).join('')}
                 </div>
+            </div>
+        </div>
+    `;
+}
+
+function renderMirrorModeButton() {
+    return `
+        <div class="neo-card overflow-hidden p-5 sm:p-6 mb-4 sm:mb-6">
+            <div class="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+                <div class="flex-1">
+                    <div class="flex items-center gap-2 mb-2">
+                        <div class="neo-btn neo-card-inset p-2.5 text-purple-600">${ICONS.User}</div>
+                        <h2 class="font-bold text-lg text-slate-800">一人ロープレ・ミラーモード</h2>
+                    </div>
+                    <p class="text-sm text-slate-600 leading-relaxed">自分の顔を鏡のように見ながら、20秒で端的に答える反復練習モード</p>
+                </div>
+                <button onclick="startMirrorMode()" class="neo-btn-primary px-6 py-3 rounded-xl font-bold flex items-center gap-2 cursor-pointer active:scale-[0.98] whitespace-nowrap">
+                    ${ICONS.Play} 開始
+                </button>
             </div>
         </div>
     `;
@@ -713,9 +742,28 @@ function renderErrorLog() {
 
 function renderApp() {
     const root = document.getElementById('app-root');
+    
+    // ミラーモードの場合は専用UIを表示
+    if (state.mirrorMode) {
+        root.innerHTML = renderMirrorMode() + renderErrorLog();
+        // カメラストリームを設定（既に開始されている場合）
+        if (state.cameraStream) {
+            setTimeout(() => {
+                const video = document.getElementById('mirror-video');
+                if (video && !video.srcObject) {
+                    video.srcObject = state.cameraStream;
+                    video.play();
+                }
+            }, 100);
+        }
+        return;
+    }
+    
+    // 通常モード
     root.innerHTML = `
         ${renderStartupModal()}
         ${renderHeader()}
+        ${renderMirrorModeButton()}
         ${renderStrategy()}
         ${renderMap()}
         ${renderScoringBoard()}
@@ -1056,6 +1104,347 @@ window.performSend = () => {
     })
     .finally(() => { state.sending = false; renderApp(); });
 };
+
+// ==========================================
+// ▼▼▼ ミラーモード機能 ▼▼▼
+// ==========================================
+
+// ユーティリティ: 配列をシャッフル
+function shuffleArray(array) {
+    const shuffled = [...array];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    return shuffled;
+}
+
+// 質問セット生成（全カテゴリからランダムに5問抽出）
+function generateMirrorQuestions() {
+    const allQuestions = state.categories.flatMap(cat => 
+        cat.questions.map(q => ({ ...q, categoryTitle: cat.title }))
+    );
+    const shuffled = shuffleArray(allQuestions);
+    state.mirrorQuestions = shuffled.slice(0, 5);
+    state.currentQuestionIndex = 0;
+}
+
+// カメラ開始
+async function startCamera() {
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+            video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+            audio: false 
+        });
+        state.cameraStream = stream;
+        const video = document.getElementById('mirror-video');
+        if (video) {
+            video.srcObject = stream;
+            video.play();
+        }
+        return true;
+    } catch (error) {
+        console.error('カメラエラー:', error);
+        state.errorLog = `カメラエラー: ${error.message}`;
+        renderApp();
+        return false;
+    }
+}
+
+// カメラ停止
+function stopCamera() {
+    if (state.cameraStream) {
+        state.cameraStream.getTracks().forEach(track => track.stop());
+        state.cameraStream = null;
+    }
+}
+
+// ミラーモード開始
+window.startMirrorMode = async () => {
+    state.mirrorMode = true;
+    state.mirrorPhase = 'waiting';
+    generateMirrorQuestions();
+    renderApp();
+    
+    // カメラ許可を待つ
+    const success = await startCamera();
+    if (success) {
+        state.mirrorPhase = 'ready';
+        renderApp();
+        // renderApp()後にvideo要素にストリームを設定
+        setTimeout(() => {
+            const video = document.getElementById('mirror-video');
+            if (video && state.cameraStream) {
+                video.srcObject = state.cameraStream;
+                video.play().catch(e => console.error('Video play error:', e));
+            }
+        }, 100);
+    } else {
+        // カメラエラーの場合はモードを終了
+        state.mirrorMode = false;
+        renderApp();
+    }
+};
+
+// ミラーモード終了
+window.exitMirrorMode = () => {
+    stopCamera();
+    if (state.countdownInterval) {
+        clearInterval(state.countdownInterval);
+        state.countdownInterval = null;
+    }
+    state.mirrorMode = false;
+    state.mirrorPhase = 'waiting';
+    state.currentQuestionIndex = 0;
+    state.countdownTimer = 20;
+    state.countdownActive = false;
+    state.showCheatSheet = false;
+    renderApp();
+};
+
+// カウントダウン開始
+function startCountdown() {
+    if (state.countdownInterval) {
+        clearInterval(state.countdownInterval);
+    }
+    state.countdownActive = true;
+    state.countdownTimer = 20;
+    
+    state.countdownInterval = setInterval(() => {
+        state.countdownTimer--;
+        renderApp();
+        
+        if (state.countdownTimer <= 0) {
+            clearInterval(state.countdownInterval);
+            state.countdownInterval = null;
+            state.countdownActive = false;
+            nextQuestion();
+        }
+    }, 1000);
+}
+
+// 次の質問へ
+function nextQuestion() {
+    state.countdownTimer = 20;
+    state.countdownActive = false;
+    state.showCheatSheet = false;
+    
+    if (state.currentQuestionIndex < state.mirrorQuestions.length - 1) {
+        state.currentQuestionIndex++;
+        state.mirrorPhase = 'question';
+        renderApp();
+    } else {
+        // 全問終了
+        state.mirrorPhase = 'complete';
+        renderApp();
+    }
+}
+
+// 回答開始ボタン
+window.startAnswer = () => {
+    state.mirrorPhase = 'question';
+    renderApp();
+    // 少し遅延してからタイマー開始（UI更新を待つ）
+    setTimeout(() => {
+        startCountdown();
+    }, 300);
+};
+
+// カンペ機能: 長押し検知
+let longPressTimer = null;
+
+window.handleCheatSheetStart = (event) => {
+    event.preventDefault();
+    longPressTimer = setTimeout(() => {
+        state.showCheatSheet = true;
+        renderApp();
+    }, 500); // 500ms長押し
+};
+
+window.handleCheatSheetEnd = () => {
+    if (longPressTimer) {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+    }
+    state.showCheatSheet = false;
+    renderApp();
+};
+
+// ミラーモード再開
+window.restartMirrorMode = () => {
+    generateMirrorQuestions();
+    state.mirrorPhase = 'ready';
+    state.currentQuestionIndex = 0;
+    state.countdownTimer = 20;
+    state.countdownActive = false;
+    state.showCheatSheet = false;
+    renderApp();
+};
+
+// ミラーモードUIレンダリング
+function renderMirrorMode() {
+    const currentQuestion = state.mirrorQuestions[state.currentQuestionIndex];
+    const questionNumber = state.currentQuestionIndex + 1;
+    const totalQuestions = state.mirrorQuestions.length;
+    const answerMemo = currentQuestion ? (state.answers[currentQuestion.q] || null) : null;
+    
+    // カウントダウンの進捗率（0-1）
+    const progress = state.countdownTimer / 20;
+    const circumference = 2 * Math.PI * 45; // 半径45の円周
+    const offset = circumference * (1 - progress);
+    
+    if (state.mirrorPhase === 'waiting') {
+        return `
+            <div class="mirror-container fixed inset-0 bg-slate-900 flex items-center justify-center">
+                <div class="neo-modal w-full max-w-md p-6 text-center">
+                    <div class="mb-6">
+                        <div class="neo-btn neo-card-inset p-4 rounded-full inline-block mb-4 text-purple-600">
+                            ${ICONS.User}
+                        </div>
+                        <h2 class="text-2xl font-bold text-slate-800 mb-2">一人ロープレ・ミラーモード</h2>
+                        <p class="text-slate-600 text-sm">カメラへのアクセスを許可してください</p>
+                    </div>
+                    <button onclick="exitMirrorMode()" class="neo-btn px-6 py-3 font-bold text-slate-700 cursor-pointer">
+                        キャンセル
+                    </button>
+                </div>
+            </div>
+        `;
+    }
+    
+    if (state.mirrorPhase === 'ready') {
+        return `
+            <div class="mirror-container fixed inset-0 bg-slate-900">
+                <video id="mirror-video" class="mirror-video" autoplay playsinline></video>
+                <div class="mirror-overlay fixed inset-0 flex items-center justify-center p-4">
+                    <div class="neo-modal w-full max-w-2xl p-6 text-center">
+                        <div class="mb-6">
+                            <div class="neo-btn neo-card-inset p-4 rounded-full inline-block mb-4 text-purple-600">
+                                ${ICONS.User}
+                            </div>
+                            <h2 class="text-2xl font-bold text-slate-800 mb-2">準備完了</h2>
+                            <p class="text-slate-600 mb-4">5問の質問に20秒で答える練習を開始します</p>
+                            <p class="text-sm text-slate-500">質問はランダムに選ばれます</p>
+                        </div>
+                        <div class="flex gap-3 justify-center">
+                            <button onclick="exitMirrorMode()" class="neo-btn px-6 py-3 font-bold text-slate-700 cursor-pointer">
+                                キャンセル
+                            </button>
+                            <button onclick="startAnswer()" class="neo-btn-primary px-8 py-3 font-bold cursor-pointer">
+                                ${ICONS.Play} 開始
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+    
+    if (state.mirrorPhase === 'complete') {
+        return `
+            <div class="mirror-container fixed inset-0 bg-slate-900">
+                <video id="mirror-video" class="mirror-video" autoplay playsinline></video>
+                <div class="mirror-overlay fixed inset-0 flex items-center justify-center p-4">
+                    <div class="neo-modal w-full max-w-md p-6 text-center">
+                        <div class="mb-6">
+                            <div class="neo-btn neo-card-inset p-4 rounded-full inline-block mb-4 text-green-600">
+                                ${ICONS.CheckCircle}
+                            </div>
+                            <h2 class="text-2xl font-bold text-slate-800 mb-2">練習完了！</h2>
+                            <p class="text-slate-600">5問すべての練習が終わりました</p>
+                        </div>
+                        <div class="flex flex-col gap-3">
+                            <button onclick="restartMirrorMode()" class="neo-btn-primary w-full py-3 font-bold cursor-pointer">
+                                ${ICONS.RefreshCw} もう一度練習
+                            </button>
+                            <button onclick="exitMirrorMode()" class="neo-btn w-full py-3 font-bold text-slate-700 cursor-pointer">
+                                メインページに戻る
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+    
+    // 質問表示中
+    return `
+        <div class="mirror-container fixed inset-0 bg-slate-900">
+            <video id="mirror-video" class="mirror-video" autoplay playsinline></video>
+            <div class="mirror-overlay fixed inset-0 flex flex-col items-center justify-center p-4">
+                <!-- 質問カード -->
+                <div class="mirror-question-card neo-card w-full max-w-3xl p-6 sm:p-8 mb-6 animate-fade-in">
+                    <div class="flex items-center justify-between mb-4">
+                        <div class="flex items-center gap-3">
+                            <div class="neo-btn neo-card-inset p-3 rounded-xl text-purple-600">
+                                ${ICONS.User}
+                            </div>
+                            <div>
+                                <div class="text-xs font-bold text-slate-500 mb-1">質問 ${questionNumber} / ${totalQuestions}</div>
+                                <h3 class="text-xl sm:text-2xl font-bold text-slate-800 leading-snug">${currentQuestion.q}</h3>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    ${!state.countdownActive ? `
+                        <button onclick="startAnswer()" class="neo-btn-primary w-full py-4 font-bold text-lg cursor-pointer mt-4">
+                            ${ICONS.Play} 回答開始
+                        </button>
+                    ` : ''}
+                </div>
+                
+                <!-- タイマー -->
+                ${state.countdownActive ? `
+                    <div class="mirror-timer-container relative mb-6">
+                        <svg class="mirror-timer-circle" width="120" height="120">
+                            <circle cx="60" cy="60" r="45" stroke="#e0e5ec" stroke-width="8" fill="none"/>
+                            <circle cx="60" cy="60" r="45" 
+                                stroke="${state.countdownTimer <= 5 ? '#ef4444' : state.countdownTimer <= 10 ? '#f59e0b' : '#4d7cff'}" 
+                                stroke-width="8" 
+                                fill="none"
+                                stroke-dasharray="${circumference}"
+                                stroke-dashoffset="${offset}"
+                                stroke-linecap="round"
+                                transform="rotate(-90 60 60)"
+                                class="transition-all duration-300"/>
+                        </svg>
+                        <div class="absolute inset-0 flex items-center justify-center">
+                            <span class="text-3xl font-black ${state.countdownTimer <= 5 ? 'text-red-600' : state.countdownTimer <= 10 ? 'text-amber-600' : 'text-blue-600'}">
+                                ${state.countdownTimer}
+                            </span>
+                        </div>
+                    </div>
+                ` : ''}
+                
+                <!-- カンペボタン -->
+                ${state.countdownActive && answerMemo ? `
+                    <button 
+                        onmousedown="handleCheatSheetStart(event)"
+                        onmouseup="handleCheatSheetEnd()"
+                        onmouseleave="handleCheatSheetEnd()"
+                        ontouchstart="handleCheatSheetStart(event)"
+                        ontouchend="handleCheatSheetEnd()"
+                        class="neo-btn px-6 py-3 font-bold text-slate-700 cursor-pointer">
+                        ${ICONS.BookOpen} 回答ヒント（長押し）
+                    </button>
+                ` : ''}
+                
+                <!-- カンペ表示 -->
+                ${state.showCheatSheet && answerMemo ? `
+                    <div class="mirror-cheatsheet neo-card-inset w-full max-w-3xl p-6 mt-4 animate-fade-in">
+                        <div class="text-xs font-bold text-slate-500 mb-2">回答メモ</div>
+                        <div class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap opacity-80">${answerMemo}</div>
+                    </div>
+                ` : ''}
+                
+                <!-- 終了ボタン -->
+                <button onclick="exitMirrorMode()" class="neo-btn mt-6 px-6 py-2 font-bold text-slate-600 cursor-pointer text-sm">
+                    ${ICONS.X} 終了
+                </button>
+            </div>
+        </div>
+    `;
+}
 
 // --- 5. 初期描画 ---
 renderApp();

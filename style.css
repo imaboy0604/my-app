@@ -142,3 +142,100 @@ button:active { transform: scale(0.98); transition: transform 0.05s; }
     margin-left: auto;
 }
 
+/* ==========================================
+   ミラーモード用スタイル
+   ========================================== */
+
+.mirror-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    z-index: 1000;
+}
+
+.mirror-video {
+    transform: scaleX(-1); /* 左右反転（ミラーリング） */
+    width: 100vw;
+    height: 100vh;
+    object-fit: cover;
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 1;
+}
+
+.mirror-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    z-index: 2;
+    background: rgba(0, 0, 0, 0.3);
+    backdrop-filter: blur(2px);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+}
+
+.mirror-question-card {
+    background: rgba(224, 229, 236, 0.95);
+    backdrop-filter: blur(10px);
+    box-shadow: var(--neo-shadow-dark), var(--neo-shadow-light);
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    animation: fadeIn 0.4s ease-out;
+}
+
+.mirror-timer-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.mirror-timer-circle {
+    filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.1));
+}
+
+.mirror-cheatsheet {
+    background: rgba(224, 229, 236, 0.92);
+    backdrop-filter: blur(8px);
+    max-height: 40vh;
+    overflow-y: auto;
+    animation: fadeIn 0.3s ease-out;
+}
+
+/* ミラーモード用アニメーション */
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+}
+
+.mirror-timer-container.pulse {
+    animation: pulse 1s ease-in-out infinite;
+}
+
+/* レスポンシブ対応 */
+@media (max-width: 640px) {
+    .mirror-question-card {
+        padding: 1.25rem !important;
+    }
+    
+    .mirror-question-card h3 {
+        font-size: 1.125rem !important;
+    }
+    
+    .mirror-timer-circle {
+        width: 100px;
+        height: 100px;
+    }
+    
+    .mirror-timer-container span {
+        font-size: 1.5rem !important;
+    }
+}
+
