@@ -131,6 +131,7 @@ const state = {
     aiAnswerModal: { isOpen: false, questionText: "", qNo: null },
     bulkAnswerModal: { isOpen: false }, // 未回答一覧モーダル用
     editAnswerModal: { isOpen: false, questionText: "", currentAnswer: "", qNo: null, aiImproving: false, aiImproveError: null },
+    moveQuestionModal: { isOpen: false, qNo: null }, // カテゴリ移動モーダル用
     errorLog: "",
     isLoadingSettings: false,
     // ミラーモード用
@@ -656,7 +657,10 @@ function renderQuestionModal() {
                         </div>
                     </div>
                 </div>
-                <div class="p-4 neo-card-inset flex justify-end items-center shrink-0">
+                <div class="p-4 neo-card-inset flex justify-between items-center shrink-0">
+                    <button onclick="openMoveQuestionModal('${q.no}')" class="flex items-center gap-2 px-4 py-2 neo-btn rounded-lg font-bold cursor-pointer text-slate-700 hover:bg-slate-100">
+                        <span class="w-4 h-4">${ICONS.ChevronDown}</span> カテゴリを移動
+                    </button>
                     <button onclick="saveFeedback()" class="flex items-center gap-2 px-6 py-3 neo-btn-primary rounded-lg font-bold cursor-pointer">
                         <span class="w-4 h-4">${ICONS.Save}</span> 保存して戻る
                     </button>
@@ -828,6 +832,61 @@ function renderBulkAnswerModal() {
     `;
 }
 
+function renderMoveQuestionModal() {
+    if (!state.moveQuestionModal.isOpen) return '';
+    
+    const qNo = state.moveQuestionModal.qNo;
+    let currentQuestion = null;
+    let currentCategoryId = null;
+    
+    // 現在の質問とカテゴリを取得
+    state.categories.forEach(cat => {
+        const q = cat.questions.find(q => q.no === qNo);
+        if (q) {
+            currentQuestion = q;
+            currentCategoryId = cat.id;
+        }
+    });
+    
+    if (!currentQuestion) return '';
+    
+    // 現在のカテゴリ以外のカテゴリを表示
+    const availableCategories = state.categories.filter(cat => cat.id !== currentCategoryId);
+    
+    return `
+        <div class="fixed inset-0 z-[65] flex items-center justify-center p-4 modal-overlay animate-fade-in" onclick="closeMoveQuestionModal()">
+            <div class="neo-modal w-full max-w-md" onclick="event.stopPropagation()">
+                <div class="neo-modal-header p-6 flex justify-between items-center">
+                    <h3 class="text-xl font-bold text-slate-800 flex items-center gap-2">
+                        <span class="text-blue-500">${ICONS.ChevronDown}</span> カテゴリを移動
+                    </h3>
+                    <button onclick="closeMoveQuestionModal()" class="neo-btn neo-close p-2 rounded-full">${ICONS.X}</button>
+                </div>
+                <div class="p-6">
+                    <div class="mb-4 p-3 bg-slate-50 rounded-lg">
+                        <p class="text-xs text-slate-500 mb-1">移動する質問</p>
+                        <p class="text-sm font-bold text-slate-800">${currentQuestion.q}</p>
+                    </div>
+                    <div class="space-y-2">
+                        <p class="text-sm font-bold text-slate-700 mb-3">移動先のカテゴリを選択してください</p>
+                        ${availableCategories.map(cat => `
+                            <button onclick="moveQuestionToCategory('${qNo}', ${cat.id})" class="w-full p-4 text-left rounded-xl border-2 border-slate-200 hover:border-blue-300 hover:bg-blue-50 transition-all cursor-pointer">
+                                <div class="flex items-center gap-3">
+                                    <div class="neo-btn neo-card-inset p-2 rounded-lg">${ICONS[cat.icon]}</div>
+                                    <div class="flex-1">
+                                        <div class="text-xs text-slate-500 mb-1">${cat.subtitle}</div>
+                                        <div class="font-bold text-slate-800">${cat.title}</div>
+                                    </div>
+                                </div>
+                            </button>
+                        `).join('')}
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
 function renderErrorLog() {
     if (!state.errorLog) return '';
     return `
@@ -880,6 +939,7 @@ function renderApp() {
         ${renderEditAnswerModal()}
         ${renderBulkAnswerModal()}
         ${renderConfirmModal()}
+        ${renderMoveQuestionModal()}
         ${renderMirrorSelectionModal()}
         ${renderErrorLog()}
     `;
@@ -1315,6 +1375,84 @@ window.closeQuestion = () => { state.selectedQuestion = null; state.timer = 0; s
 window.toggleTimer = () => { state.timerActive = !state.timerActive; if (state.timerActive) { state.timerInterval = setInterval(() => { state.timer++; renderApp(); }, 1000); } else { clearInterval(state.timerInterval); } renderApp(); };
 window.resetTimer = () => { state.timer = 0; state.timerActive = false; clearInterval(state.timerInterval); renderApp(); };
 window.saveFeedback = () => { const good = document.getElementById('fb-good').value; const advice = document.getElementById('fb-advice').value; state.feedback[state.selectedQuestion.no] = { good, advice }; localStorage.setItem('interview_feedback', JSON.stringify(state.feedback)); closeQuestion(); };
+
+window.openMoveQuestionModal = (qNo) => {
+    state.moveQuestionModal = { isOpen: true, qNo: qNo };
+    renderApp();
+};
+
+window.closeMoveQuestionModal = () => {
+    state.moveQuestionModal = { isOpen: false, qNo: null };
+    renderApp();
+};
+
+window.moveQuestionToCategory = (qNo, targetCategoryId) => {
+    let questionToMove = null;
+    let sourceCategoryIndex = -1;
+    let sourceQuestionIndex = -1;
+    
+    // 質問を見つけて、元のカテゴリから削除
+    state.categories.forEach((cat, catIdx) => {
+        cat.questions.forEach((q, qIdx) => {
+            if (q.no === qNo) {
+                questionToMove = q;
+                sourceCategoryIndex = catIdx;
+                sourceQuestionIndex = qIdx;
+            }
+        });
+    });
+    
+    if (!questionToMove) {
+        alert('質問が見つかりませんでした');
+        return;
+    }
+    
+    // 質問を元のカテゴリから削除
+    state.categories[sourceCategoryIndex].questions.splice(sourceQuestionIndex, 1);
+    
+    // 移動先のカテゴリに追加
+    const targetCategory = state.categories.find(cat => cat.id === targetCategoryId);
+    if (!targetCategory) {
+        alert('移動先のカテゴリが見つかりませんでした');
+        return;
+    }
+    
+    // 質問番号を新しいカテゴリに合わせて更新（カテゴリID-番号の形式）
+    const newQuestionNo = `${targetCategoryId}-${targetCategory.questions.length + 1}`;
+    questionToMove = { ...questionToMove, no: newQuestionNo };
+    
+    // フィードバックのキーも更新
+    if (state.feedback[qNo]) {
+        state.feedback[newQuestionNo] = state.feedback[qNo];
+        delete state.feedback[qNo];
+    }
+    
+    targetCategory.questions.push(questionToMove);
+    
+    // カテゴリを保存
+    localStorage.setItem('interview_categories', JSON.stringify(state.categories));
+    localStorage.setItem('interview_feedback', JSON.stringify(state.feedback));
+    window.saveSettings();
+    
+    // モーダルを閉じて、カテゴリを更新
+    closeMoveQuestionModal();
+    
+    // 質問モーダルが開いている場合は閉じる
+    if (state.selectedQuestion && state.selectedQuestion.no === qNo) {
+        state.selectedQuestion = null;
+    }
+    
+    // 移動先のカテゴリを自動的に開く
+    const updatedTargetCategory = state.categories.find(c => c.id === targetCategoryId);
+    if (updatedTargetCategory) {
+        state.selectedCategory = updatedTargetCategory;
+    } else if (state.selectedCategory) {
+        // 現在のカテゴリがまだ存在する場合は更新
+        state.selectedCategory = state.categories.find(c => c.id === state.selectedCategory.id);
+    }
+    
+    renderApp();
+};
 
 // ミラーモード用フィードバック保存
 window.saveMirrorFeedback = () => {
