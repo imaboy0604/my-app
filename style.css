@@ -297,6 +297,76 @@ button:active { transform: scale(0.98); transition: transform 0.05s; }
     background: rgba(255, 255, 255, 0.5);
 }
 
+/* アドバイスTipsスライダー用スタイル */
+.advice-tips-container {
+    position: relative;
+}
+
+.advice-tip-content {
+    min-height: 120px;
+    transition: opacity 0.3s ease;
+}
+
+.advice-nav-btn {
+    transition: transform 0.1s ease, opacity 0.2s ease;
+}
+
+.advice-nav-btn:hover:not(:disabled) {
+    transform: scale(1.1);
+}
+
+.advice-nav-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+.advice-indicators {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.advice-indicator {
+    transition: all 0.2s ease;
+    cursor: pointer;
+}
+
+.advice-indicator:hover {
+    transform: scale(1.3);
+}
+
+.advice-indicator-active {
+    background-color: var(--accent-blue) !important;
+    width: 8px !important;
+    height: 8px !important;
+    box-shadow: 0 2px 4px rgba(77, 124, 255, 0.4);
+}
+
+/* スワイプ対応（モバイル） */
+.advice-tips-container {
+    touch-action: pan-y;
+}
+
+@media (max-width: 640px) {
+    .advice-tip-content {
+        min-height: 100px;
+    }
+    
+    .advice-nav-btn {
+        padding: 0.5rem;
+    }
+    
+    .advice-indicator {
+        width: 6px;
+        height: 6px;
+    }
+    
+    .advice-indicator-active {
+        width: 8px !important;
+        height: 8px !important;
+    }
+}
+
 /* レスポンシブ対応 */
 @media (max-width: 640px) {
     .mirror-question-card {

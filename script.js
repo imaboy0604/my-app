@@ -33,6 +33,8 @@ const ICONS = {
     RefreshCw: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>`,
     ChevronDown: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>`,
     ChevronUp: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg>`,
+    ChevronLeft: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>`,
+    ChevronRight: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>`,
     GraduationCap: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>`,
     Play: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>`,
     Pause: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>`,
@@ -163,7 +165,13 @@ const state = {
         transcribedText: '',
         interimText: '',
         errorMessage: null
-    }
+    },
+    // アドバイスTips用
+    adviceTips: [],
+    currentAdviceIndex: 0,
+    adviceCacheKey: null,
+    adviceLoading: false,
+    adviceError: null
 };
 
 // --- 初期化チェック ---
@@ -232,6 +240,315 @@ function renderConfirmModal() {
                     <button onclick="closeConfirmModal()" class="neo-btn px-5 py-3 font-bold text-slate-700 cursor-pointer">キャンセル</button>
                     <button onclick="executeConfirmAction()" class="neo-btn-primary px-5 py-3 font-bold cursor-pointer">OK</button>
                 </div>
+            </div>
+        </div>
+    `;
+}
+
+// --- アドバイスTips生成・キャッシュ管理 ---
+
+// データハッシュを生成（データ変更検知用）
+function generateDataHash() {
+    const dataString = JSON.stringify({
+        categories: state.categories,
+        answers: state.answers,
+        feedback: state.feedback
+    });
+    // 簡易ハッシュ関数
+    let hash = 0;
+    for (let i = 0; i < dataString.length; i++) {
+        const char = dataString.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash; // Convert to 32bit integer
+    }
+    return hash.toString();
+}
+
+// キャッシュからアドバイスを読み込み
+function loadAdviceFromCache() {
+    try {
+        const cached = localStorage.getItem('interview_advice_cache');
+        if (!cached) return null;
+        
+        const cacheData = JSON.parse(cached);
+        const currentHash = generateDataHash();
+        
+        // データが変更されていない場合のみキャッシュを使用
+        if (cacheData.hash === currentHash && cacheData.tips && cacheData.tips.length > 0) {
+            state.adviceTips = cacheData.tips;
+            state.adviceCacheKey = cacheData.hash;
+            return true;
+        }
+        return null;
+    } catch (e) {
+        console.warn('Failed to load advice cache:', e);
+        return null;
+    }
+}
+
+// アドバイスをキャッシュに保存
+function saveAdviceToCache(tips) {
+    try {
+        const hash = generateDataHash();
+        const cacheData = {
+            hash: hash,
+            tips: tips,
+            timestamp: Date.now()
+        };
+        localStorage.setItem('interview_advice_cache', JSON.stringify(cacheData));
+        state.adviceCacheKey = hash;
+    } catch (e) {
+        console.warn('Failed to save advice cache:', e);
+    }
+}
+
+// キャッシュを無効化
+function invalidateAdviceCache() {
+    localStorage.removeItem('interview_advice_cache');
+    state.adviceCacheKey = null;
+}
+
+// バッチでアドバイスを生成
+window.generateAdviceBatch = async (force = false) => {
+    // キャッシュ確認（強制再生成でない場合）
+    if (!force) {
+        const cached = loadAdviceFromCache();
+        if (cached) {
+            renderApp();
+            return;
+        }
+    }
+    
+    // 回答データが少ない場合はスキップ
+    const answeredQuestions = Object.keys(state.answers).filter(q => state.answers[q] && state.answers[q].trim().length > 0);
+    if (answeredQuestions.length < 2) {
+        // デフォルトのアドバイスを表示
+        state.adviceTips = [{
+            type: 'info',
+            title: '💡 アドバイスを生成するには',
+            content: '質問に回答を追加すると、AIがあなたの回答を分析してパーソナライズされたアドバイスを生成します。',
+            highlights: ['回答を追加', 'AI分析', 'パーソナライズ']
+        }];
+        renderApp();
+        return;
+    }
+    
+    state.adviceLoading = true;
+    state.adviceError = null;
+    renderApp();
+    
+    try {
+        // 質問と回答のデータを整理
+        const qaData = [];
+        state.categories.forEach(cat => {
+            cat.questions.forEach(q => {
+                if (state.answers[q.q] && state.answers[q.q].trim().length > 0) {
+                    qaData.push({
+                        category: cat.title,
+                        question: q.q,
+                        answer: state.answers[q.q],
+                        no: q.no
+                    });
+                }
+            });
+        });
+        
+        if (qaData.length < 2) {
+            throw new Error('分析には最低2つの回答が必要です');
+        }
+        
+        // バッチプロンプトを作成
+        const prompt = `あなたは面接対策の専門家です。以下の質問と回答のデータを分析して、面接対策に役立つ具体的なアドバイスを複数生成してください。
+
+【分析対象データ】
+${qaData.map((qa, idx) => `
+${idx + 1}. カテゴリ: ${qa.category}
+   質問: ${qa.question}
+   回答メモ: ${qa.answer.substring(0, 200)}${qa.answer.length > 200 ? '...' : ''}
+`).join('\n')}
+
+【アドバイスの種類】
+1. 類似質問の分析: 「この質問とこの質問は意図が似ているので、同じ回答の方向性でいけますね」のような分析
+2. 回答パターンの分析: 「このカテゴリの回答は具体性に欠ける傾向があります」のような分析
+3. 改善のヒント: 「このエピソードは複数の質問で活用できます」のような具体的な改善提案
+
+【出力フォーマット】
+JSON形式で、以下の構造で出力してください：
+{
+  "tips": [
+    {
+      "type": "similar" | "pattern" | "improvement",
+      "title": "アドバイスのタイトル（絵文字を含む）",
+      "content": "具体的なアドバイス内容（2-3文程度）",
+      "highlights": ["キーワード1", "キーワード2", "キーワード3"]
+    }
+  ]
+}
+
+最低5個、最大10個のアドバイスを生成してください。各アドバイスは具体的で実用的な内容にしてください。`;
+
+        const response = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt: prompt })
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || 'Server Error');
+        }
+
+        const data = await response.json();
+        const responseText = data.candidates[0].content.parts[0].text;
+        
+        // JSONを抽出（```json で囲まれている場合がある）
+        let jsonText = responseText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+        const jsonMatch = jsonText.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+            jsonText = jsonMatch[0];
+        }
+        
+        const adviceData = JSON.parse(jsonText);
+        
+        if (adviceData.tips && Array.isArray(adviceData.tips) && adviceData.tips.length > 0) {
+            state.adviceTips = adviceData.tips;
+            saveAdviceToCache(adviceData.tips);
+        } else {
+            throw new Error('アドバイスの生成に失敗しました');
+        }
+        
+    } catch (e) {
+        console.error('Advice generation error:', e);
+        state.adviceError = e.message;
+        // エラー時はデフォルトのアドバイスを表示
+        state.adviceTips = [{
+            type: 'error',
+            title: '⚠️ アドバイスの生成に失敗しました',
+            content: 'しばらくしてから「更新」ボタンを押して再試行してください。',
+            highlights: ['再試行']
+        }];
+    } finally {
+        state.adviceLoading = false;
+        state.currentAdviceIndex = 0;
+        renderApp();
+    }
+};
+
+// アドバイスTipsスライダーのナビゲーション
+window.nextAdvice = () => {
+    if (state.adviceTips.length === 0) return;
+    state.currentAdviceIndex = (state.currentAdviceIndex + 1) % state.adviceTips.length;
+    renderApp();
+};
+
+window.prevAdvice = () => {
+    if (state.adviceTips.length === 0) return;
+    state.currentAdviceIndex = (state.currentAdviceIndex - 1 + state.adviceTips.length) % state.adviceTips.length;
+    renderApp();
+};
+
+window.goToAdvice = (index) => {
+    if (index >= 0 && index < state.adviceTips.length) {
+        state.currentAdviceIndex = index;
+        renderApp();
+    }
+};
+
+function renderAdviceTipsSlider() {
+    const tips = state.adviceTips;
+    const currentIndex = state.currentAdviceIndex;
+    
+    if (tips.length === 0) {
+        return `
+        <div class="neo-card relative overflow-hidden p-5 sm:p-6">
+            <div class="absolute top-0 right-0 p-8 opacity-20 scale-150">${ICONS.Lightbulb}</div>
+            <div class="relative z-10 space-y-3">
+                <div class="neo-chip inline-flex items-center gap-2 text-amber-700">${ICONS.Lightbulb} アドバイスTips</div>
+                <p class="text-slate-600 text-sm">アドバイスを読み込み中...</p>
+            </div>
+        </div>
+        `;
+    }
+    
+    const currentTip = tips[currentIndex];
+    const typeColors = {
+        similar: 'text-blue-700',
+        pattern: 'text-purple-700',
+        improvement: 'text-green-700',
+        info: 'text-amber-700',
+        error: 'text-red-700'
+    };
+    const typeColor = typeColors[currentTip.type] || 'text-slate-700';
+    
+    return `
+        <div class="neo-card relative overflow-hidden p-5 sm:p-6 advice-tips-container">
+            <div class="absolute top-0 right-0 p-8 opacity-20 scale-150">${ICONS.Lightbulb}</div>
+            <div class="relative z-10 space-y-4">
+                <div class="flex items-center justify-between mb-2">
+                    <div class="neo-chip inline-flex items-center gap-2 ${typeColor}">${ICONS.Lightbulb} アドバイスTips</div>
+                    <button 
+                        onclick="generateAdviceBatch(true)" 
+                        class="neo-btn p-2 rounded-lg text-xs font-bold text-slate-600 hover:text-slate-800 transition-colors cursor-pointer"
+                        title="アドバイスを更新">
+                        ${ICONS.RefreshCw}
+                    </button>
+                </div>
+                
+                ${state.adviceLoading ? `
+                    <div class="flex items-center justify-center py-8">
+                        <div class="animate-spin text-blue-500">${ICONS.Loader2}</div>
+                        <span class="ml-3 text-slate-600 text-sm">アドバイスを生成中...</span>
+                    </div>
+                ` : `
+                    <div class="advice-tip-content">
+                        <h3 class="text-lg font-bold text-slate-800 mb-2">${currentTip.title || '💡 アドバイス'}</h3>
+                        <p class="text-slate-700 leading-relaxed text-sm sm:text-base mb-3">${currentTip.content || ''}</p>
+                        ${currentTip.highlights && currentTip.highlights.length > 0 ? `
+                            <div class="flex flex-wrap gap-2">
+                                ${currentTip.highlights.map(tag => `<span class="neo-chip">#${tag}</span>`).join('')}
+                            </div>
+                        ` : ''}
+                    </div>
+                    
+                    ${tips.length > 1 ? `
+                        <div class="flex items-center justify-between mt-4 pt-4 border-t border-slate-200">
+                            <button 
+                                onclick="prevAdvice()" 
+                                class="advice-nav-btn neo-btn p-2 rounded-lg cursor-pointer ${currentIndex === 0 ? 'opacity-50 cursor-not-allowed' : ''}"
+                                ${currentIndex === 0 ? 'disabled' : ''}
+                                title="前のアドバイス">
+                                ${ICONS.ChevronLeft}
+                            </button>
+                            
+                            <div class="flex items-center gap-2 advice-indicators">
+                                ${tips.map((_, idx) => `
+                                    <button 
+                                        onclick="goToAdvice(${idx})"
+                                        class="advice-indicator w-2 h-2 rounded-full transition-all cursor-pointer ${idx === currentIndex ? 'advice-indicator-active' : 'bg-slate-300'}"
+                                        title="アドバイス ${idx + 1}">
+                                    </button>
+                                `).join('')}
+                            </div>
+                            
+                            <button 
+                                onclick="nextAdvice()" 
+                                class="advice-nav-btn neo-btn p-2 rounded-lg cursor-pointer ${currentIndex === tips.length - 1 ? 'opacity-50 cursor-not-allowed' : ''}"
+                                ${currentIndex === tips.length - 1 ? 'disabled' : ''}
+                                title="次のアドバイス">
+                                ${ICONS.ChevronRight}
+                            </button>
+                        </div>
+                        <div class="text-center text-xs text-slate-500 mt-2">
+                            ${currentIndex + 1} / ${tips.length}
+                        </div>
+                    ` : ''}
+                `}
+                
+                ${state.adviceError ? `
+                    <div class="mt-3 p-2 bg-red-50 border border-red-200 rounded-lg text-red-700 text-xs">
+                        ${ICONS.AlertCircle} ${state.adviceError}
+                    </div>
+                ` : ''}
             </div>
         </div>
     `;
@@ -923,11 +1240,16 @@ function renderApp() {
     }
     
     // 通常モード
+    // アドバイスがまだ読み込まれていない場合は初期化
+    if (state.adviceTips.length === 0 && !state.adviceLoading) {
+        generateAdviceBatch();
+    }
+    
     root.innerHTML = `
         ${renderStartupModal()}
         ${renderHeader()}
         ${renderMirrorModeButton()}
-        ${renderStrategy()}
+        ${renderAdviceTipsSlider()}
         ${renderMap()}
         ${renderScoringBoard()}
         ${renderOverallFeedbackInput()}
@@ -1025,6 +1347,8 @@ window.saveAnswer = (qText, aText) => {
     }).catch(e => console.warn("Failed to save answer to cloud", e));
 
     state.answers[qText] = aText;
+    // 回答が変更されたのでアドバイスキャッシュを無効化
+    invalidateAdviceCache();
     renderApp();
 };
 
@@ -1330,6 +1654,8 @@ window.saveSettings = () => {
         method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
     }).catch(e => console.warn("Failed to save settings to cloud", e));
+    // カテゴリが変更されたのでアドバイスキャッシュを無効化
+    invalidateAdviceCache();
 };
 
 window.openCategory = (id) => { state.selectedCategory = state.categories.find(c => c.id === id); renderApp(); };
@@ -1374,7 +1700,7 @@ window.openQuestion = (no) => { state.selectedQuestion = state.selectedCategory.
 window.closeQuestion = () => { state.selectedQuestion = null; state.timer = 0; state.timerActive = false; clearInterval(state.timerInterval); renderApp(); };
 window.toggleTimer = () => { state.timerActive = !state.timerActive; if (state.timerActive) { state.timerInterval = setInterval(() => { state.timer++; renderApp(); }, 1000); } else { clearInterval(state.timerInterval); } renderApp(); };
 window.resetTimer = () => { state.timer = 0; state.timerActive = false; clearInterval(state.timerInterval); renderApp(); };
-window.saveFeedback = () => { const good = document.getElementById('fb-good').value; const advice = document.getElementById('fb-advice').value; state.feedback[state.selectedQuestion.no] = { good, advice }; localStorage.setItem('interview_feedback', JSON.stringify(state.feedback)); closeQuestion(); };
+window.saveFeedback = () => { const good = document.getElementById('fb-good').value; const advice = document.getElementById('fb-advice').value; state.feedback[state.selectedQuestion.no] = { good, advice }; localStorage.setItem('interview_feedback', JSON.stringify(state.feedback)); invalidateAdviceCache(); closeQuestion(); };
 
 window.openMoveQuestionModal = (qNo) => {
     state.moveQuestionModal = { isOpen: true, qNo: qNo };
@@ -1432,6 +1758,7 @@ window.moveQuestionToCategory = (qNo, targetCategoryId) => {
     // カテゴリを保存
     localStorage.setItem('interview_categories', JSON.stringify(state.categories));
     localStorage.setItem('interview_feedback', JSON.stringify(state.feedback));
+    invalidateAdviceCache();
     window.saveSettings();
     
     // モーダルを閉じて、カテゴリを更新
@@ -1467,6 +1794,9 @@ window.saveMirrorFeedback = () => {
     state.mirrorReviewData.feedbackGood = good;
     state.mirrorReviewData.feedbackMore = advice;
     
+    // フィードバックが変更されたのでアドバイスキャッシュを無効化
+    invalidateAdviceCache();
+    
     renderApp();
 };
 window.openAiModal = () => { state.aiModalOpen = true; state.aiError = null; renderApp(); };
@@ -1501,6 +1831,7 @@ window.runAiGeneration = async () => {
         state.categories = state.categories.map(cat => { if (cat.id === result.categoryId) { const newNo = `${cat.id}-${cat.questions.length + 1}`; return { ...cat, questions: [...cat.questions, { no: newNo, q: result.questionText, intent: result.intent, important: result.important }] }; } return cat; });
 
         localStorage.setItem('interview_categories', JSON.stringify(state.categories));
+        invalidateAdviceCache();
         saveSettings();
 
         alert(`質問を追加しました！`);
@@ -2563,3 +2894,35 @@ function renderMirrorSelectionModal() {
 
 // --- 5. 初期描画 ---
 renderApp();
+
+// アドバイスTipsスライダーのスワイプ対応（モバイル）
+let touchStartX = 0;
+let touchEndX = 0;
+
+document.addEventListener('touchstart', (e) => {
+    if (e.target.closest('.advice-tips-container')) {
+        touchStartX = e.changedTouches[0].screenX;
+    }
+}, { passive: true });
+
+document.addEventListener('touchend', (e) => {
+    if (e.target.closest('.advice-tips-container')) {
+        touchEndX = e.changedTouches[0].screenX;
+        handleSwipe();
+    }
+}, { passive: true });
+
+function handleSwipe() {
+    const swipeThreshold = 50;
+    const diff = touchStartX - touchEndX;
+    
+    if (Math.abs(diff) > swipeThreshold) {
+        if (diff > 0) {
+            // 左スワイプ（次のアドバイス）
+            nextAdvice();
+        } else {
+            // 右スワイプ（前のアドバイス）
+            prevAdvice();
+        }
+    }
+}
