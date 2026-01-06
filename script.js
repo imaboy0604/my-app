@@ -2236,6 +2236,14 @@ window.startManualMirrorMode = () => {
     startMirrorMode();
 };
 
+// ランダムモードで開始（タイマー設定後）
+window.startRandomMirrorMode = () => {
+    state.mirrorSelectionModalOpen = false;
+    // ランダムモードの場合は質問を生成
+    generateMirrorQuestions();
+    startMirrorMode();
+};
+
 // ミラーモード開始（共通処理）
 async function startMirrorMode() {
     state.mirrorMode = true;
@@ -2275,6 +2283,10 @@ window.exitMirrorMode = () => {
     if (state.speechRecognition.recognition && state.speechRecognition.isActive) {
         stopSpeechRecognition();
     }
+    // 音声読み上げも停止
+    if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+    }
     if (state.countdownInterval) {
         clearInterval(state.countdownInterval);
         state.countdownInterval = null;
@@ -2312,7 +2324,7 @@ function updateTimerDisplay() {
     
     if (!timerElement || !timerCircle) return; // 要素が存在しない場合は何もしない
     
-    const progress = state.countdownTimer / 20;
+    const progress = state.countdownTimer / state.countdownTimerDuration;
     const circumference = 2 * Math.PI * 45;
     const offset = circumference * (1 - progress);
     
@@ -2404,8 +2416,17 @@ function nextQuestion() {
         state.currentQuestionIndex++;
         state.mirrorPhase = 'question';
         renderApp();
+        // 質問を音声で読み上げ
+        const currentQuestion = state.mirrorQuestions[state.currentQuestionIndex];
+        if (currentQuestion) {
+            setTimeout(() => speakQuestion(currentQuestion.q), 300);
+        }
     } else {
         // 全問終了
+        // 読み上げを停止
+        if ('speechSynthesis' in window) {
+            window.speechSynthesis.cancel();
+        }
         state.mirrorPhase = 'complete';
         renderApp();
     }
@@ -2418,6 +2439,11 @@ window.prevQuestion = () => {
         state.currentQuestionIndex--;
         state.mirrorPhase = 'question';
         renderApp();
+        // 質問を音声で読み上げ
+        const currentQuestion = state.mirrorQuestions[state.currentQuestionIndex];
+        if (currentQuestion) {
+            setTimeout(() => speakQuestion(currentQuestion.q), 300);
+        }
     }
 };
 
@@ -2428,6 +2454,11 @@ window.skipQuestion = () => {
         state.currentQuestionIndex++;
         state.mirrorPhase = 'question';
         renderApp();
+        // 質問を音声で読み上げ
+        const currentQuestion = state.mirrorQuestions[state.currentQuestionIndex];
+        if (currentQuestion) {
+            setTimeout(() => speakQuestion(currentQuestion.q), 300);
+        }
     }
 };
 
@@ -2448,14 +2479,55 @@ window.editGeneratedAnswer = () => {
     renderApp();
 };
 
+// 質問を音声で読み上げる
+function speakQuestion(questionText) {
+    if ('speechSynthesis' in window) {
+        // 既存の読み上げを停止
+        window.speechSynthesis.cancel();
+        
+        const utterance = new SpeechSynthesisUtterance(questionText);
+        utterance.lang = 'ja-JP';
+        utterance.rate = 0.9; // 読み上げ速度（少し遅め）
+        utterance.pitch = 1.0;
+        utterance.volume = 1.0;
+        
+        // 日本語音声を優先的に選択（音声リストが読み込まれるまで待つ）
+        const setJapaneseVoice = () => {
+            const voices = window.speechSynthesis.getVoices();
+            const japaneseVoice = voices.find(voice => voice.lang.startsWith('ja'));
+            if (japaneseVoice) {
+                utterance.voice = japaneseVoice;
+            }
+            window.speechSynthesis.speak(utterance);
+        };
+        
+        // 音声リストが既に読み込まれている場合
+        if (window.speechSynthesis.getVoices().length > 0) {
+            setJapaneseVoice();
+        } else {
+            // 音声リストの読み込みを待つ
+            window.speechSynthesis.onvoiceschanged = () => {
+                setJapaneseVoice();
+            };
+        }
+    }
+}
+
 // 回答開始ボタン
 window.startAnswer = () => {
     state.mirrorPhase = 'question';
     renderApp();
-    // 少し遅延してからタイマー開始（UI更新を待つ）
+    
+    // 質問を音声で読み上げ（タイマー開始前に）
+    const currentQuestion = state.mirrorQuestions[state.currentQuestionIndex];
+    if (currentQuestion) {
+        speakQuestion(currentQuestion.q);
+    }
+    
+    // 少し遅延してからタイマー開始（UI更新と音声読み上げを待つ）
     setTimeout(() => {
         startCountdown();
-    }, 300);
+    }, 500);
 };
 
 // カンペ機能: 長押し検知
@@ -2480,12 +2552,18 @@ window.handleCheatSheetEnd = () => {
 
 // ミラーモード再開
 window.restartMirrorMode = () => {
-    generateMirrorQuestions();
+    // 既存の質問セットを保持（選択した質問を再使用）
+    // 質問セットが空の場合のみ再生成
+    if (state.mirrorQuestions.length === 0) {
+        generateMirrorQuestions();
+    }
     state.mirrorPhase = 'ready';
     state.currentQuestionIndex = 0;
-    state.countdownTimer = 20;
+    state.countdownTimer = state.countdownTimerDuration;
     state.countdownActive = false;
     state.showCheatSheet = false;
+    // レビューデータをリセット
+    resetReviewData();
     renderApp();
 };
 
@@ -2505,6 +2583,11 @@ window.retryMirrorQuestion = () => {
     state.showCheatSheet = false;
     // レビューデータは保持（フィードバック等）
     renderApp();
+    // 質問を音声で読み上げ
+    const currentQuestion = state.mirrorQuestions[state.currentQuestionIndex];
+    if (currentQuestion) {
+        setTimeout(() => speakQuestion(currentQuestion.q), 300);
+    }
 };
 
 // ミラーモードUIレンダリング
