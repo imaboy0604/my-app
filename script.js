@@ -141,6 +141,7 @@ const state = {
     mirrorQuestions: [],
     currentQuestionIndex: 0,
     countdownTimer: 20,
+    countdownTimerDuration: parseInt(localStorage.getItem('mirror_timer_duration')) || 20, // タイマー秒数（20秒～60秒、10秒区切り）
     countdownActive: false,
     countdownInterval: null,
     cameraStream: null,
@@ -156,7 +157,8 @@ const state = {
         aiAnswerError: null,
         feedbackGood: '',
         feedbackMore: '',
-        speechTranscription: '' // 文字起こし結果
+        speechTranscription: '', // 文字起こし結果
+        generatedAnswer: '' // AIで生成された回答（編集用）
     },
     speechRecognition: {
         isActive: false,
@@ -1480,8 +1482,16 @@ window.saveEditedAnswer = () => {
     }
     
     saveAnswer(modal.questionText, editedAnswer);
+    
+    // ミラーモードの場合は生成された回答も更新
+    if (state.mirrorMode && state.mirrorReviewData) {
+        state.mirrorReviewData.generatedAnswer = editedAnswer;
+    }
+    
     closeEditAnswerModal();
-    closeQuestion(); // 質問モーダルも閉じる
+    if (!state.mirrorMode) {
+        closeQuestion(); // 質問モーダルも閉じる（ミラーモードでない場合のみ）
+    }
     renderApp();
 };
 
@@ -1635,6 +1645,8 @@ window.runAiAnswerGenerationForMirror = async () => {
 
         // 保存
         saveAnswer(questionText, answerText);
+        // 生成された回答をstateに保存（編集用）
+        state.mirrorReviewData.generatedAnswer = answerText;
         state.mirrorReviewData.aiAnswerInput = '';
         state.mirrorReviewData.speechTranscription = ''; // 使用後はクリア
         renderApp();
@@ -2167,12 +2179,20 @@ function stopCamera() {
     }
 }
 
+// タイマー秒数を更新
+window.updateMirrorTimerDuration = (duration) => {
+    const durationNum = parseInt(duration);
+    state.countdownTimerDuration = durationNum;
+    localStorage.setItem('mirror_timer_duration', durationNum.toString());
+};
+
 // ミラーモード選択画面を開く
 window.openMirrorModeSelection = (mode) => {
     state.mirrorQuestionMode = mode;
     if (mode === 'random') {
-        // ランダムモードは直接開始
-        startMirrorMode();
+        // ランダムモードはタイマー設定モーダルを表示
+        state.mirrorSelectionModalOpen = true;
+        renderApp();
     } else {
         // 手動選択モードは選択画面を表示
         state.mirrorSelectionModalOpen = true;
@@ -2262,7 +2282,7 @@ window.exitMirrorMode = () => {
     state.mirrorMode = false;
     state.mirrorPhase = 'waiting';
     state.currentQuestionIndex = 0;
-    state.countdownTimer = 20;
+    state.countdownTimer = state.countdownTimerDuration;
     state.countdownActive = false;
     state.showCheatSheet = false;
     state.mirrorQuestions = [];
@@ -2313,7 +2333,7 @@ function startCountdown() {
         clearInterval(state.countdownInterval);
     }
     state.countdownActive = true;
-    state.countdownTimer = 20;
+    state.countdownTimer = state.countdownTimerDuration;
     
     // 初期表示はrenderApp()で行う
     renderApp();
@@ -2323,40 +2343,8 @@ function startCountdown() {
         updateTimerDisplay();
     }, 100);
     
-    // カウントダウン開始と同時に音声認識を自動開始
-    if (window.SpeechRecognition || window.webkitSpeechRecognition) {
-        setTimeout(() => {
-            if (!state.speechRecognition.isActive) {
-                // 音声認識が初期化されていない場合は初期化
-                if (!state.speechRecognition.recognition) {
-                    initSpeechRecognition();
-                }
-                // 音声認識を開始
-                try {
-                    if (state.speechRecognition.recognition) {
-                        state.speechRecognition.recognition.start();
-                        state.speechRecognition.isActive = true;
-                        state.speechRecognition.transcribedText = '';
-                        state.speechRecognition.interimText = '';
-                        state.speechRecognition.errorMessage = null;
-                        renderApp();
-                    }
-                } catch (e) {
-                    // 既に開始されている場合は無視
-                    if (e.name === 'InvalidStateError') {
-                        // 既に開始されている場合は状態を更新
-                        state.speechRecognition.isActive = true;
-                        renderApp();
-                    } else {
-                        console.warn('音声認識の自動開始に失敗:', e);
-                        // エラーメッセージを設定
-                        state.speechRecognition.errorMessage = '音声認識の自動開始に失敗しました。手動で開始してください。';
-                        renderApp();
-                    }
-                }
-            }
-        }, 500); // UI更新を待つ
-    }
+    // 音声認識機能は無効化（マイク許可を求めないため）
+    // 音声認識を自動開始しない
     
     state.countdownInterval = setInterval(() => {
         state.countdownTimer--;
@@ -2387,13 +2375,12 @@ function startCountdown() {
     }, 1000);
 }
 
-// 次の質問へ（レビューフェーズから呼び出される）
-function nextQuestion() {
+function resetReviewData() {
     // 音声認識を停止
     if (state.speechRecognition.recognition && state.speechRecognition.isActive) {
         stopSpeechRecognition();
     }
-    state.countdownTimer = 20;
+    state.countdownTimer = state.countdownTimerDuration;
     state.countdownActive = false;
     state.showCheatSheet = false;
     // レビューデータをリセット
@@ -2402,10 +2389,16 @@ function nextQuestion() {
     state.mirrorReviewData.feedbackGood = '';
     state.mirrorReviewData.feedbackMore = '';
     state.mirrorReviewData.aiAnswerError = null;
+    state.mirrorReviewData.generatedAnswer = '';
     // 音声認識データをリセット
     state.speechRecognition.transcribedText = '';
     state.speechRecognition.interimText = '';
     state.speechRecognition.errorMessage = null;
+}
+
+// 次の質問へ（レビューフェーズから呼び出される）
+function nextQuestion() {
+    resetReviewData();
     
     if (state.currentQuestionIndex < state.mirrorQuestions.length - 1) {
         state.currentQuestionIndex++;
@@ -2417,6 +2410,43 @@ function nextQuestion() {
         renderApp();
     }
 }
+
+// 前の質問に戻る
+window.prevQuestion = () => {
+    if (state.currentQuestionIndex > 0) {
+        resetReviewData();
+        state.currentQuestionIndex--;
+        state.mirrorPhase = 'question';
+        renderApp();
+    }
+};
+
+// スキップして次の質問へ
+window.skipQuestion = () => {
+    if (state.currentQuestionIndex < state.mirrorQuestions.length - 1) {
+        resetReviewData();
+        state.currentQuestionIndex++;
+        state.mirrorPhase = 'question';
+        renderApp();
+    }
+};
+
+// 生成された回答を編集
+window.editGeneratedAnswer = () => {
+    const currentQuestion = state.mirrorQuestions[state.currentQuestionIndex];
+    if (!currentQuestion || !state.mirrorReviewData.generatedAnswer) return;
+    
+    // 編集モーダルを開く
+    state.editAnswerModal = {
+        isOpen: true,
+        questionText: currentQuestion.q,
+        currentAnswer: state.mirrorReviewData.generatedAnswer,
+        qNo: currentQuestion.no,
+        aiImproving: false,
+        aiImproveError: null
+    };
+    renderApp();
+};
 
 // 回答開始ボタン
 window.startAnswer = () => {
@@ -2470,7 +2500,7 @@ window.retryMirrorQuestion = () => {
     state.speechRecognition.interimText = '';
     state.mirrorReviewData.speechTranscription = '';
     state.mirrorPhase = 'question';
-    state.countdownTimer = 20;
+    state.countdownTimer = state.countdownTimerDuration;
     state.countdownActive = false;
     state.showCheatSheet = false;
     // レビューデータは保持（フィードバック等）
@@ -2485,7 +2515,7 @@ function renderMirrorMode() {
     const answerMemo = currentQuestion ? (state.answers[currentQuestion.q] || null) : null;
     
     // カウントダウンの進捗率（0-1）
-    const progress = state.countdownTimer / 20;
+    const progress = state.countdownTimer / state.countdownTimerDuration;
     const circumference = 2 * Math.PI * 45; // 半径45の円周
     const offset = circumference * (1 - progress);
     
@@ -2519,7 +2549,7 @@ function renderMirrorMode() {
                                 ${ICONS.User}
                             </div>
                             <h2 class="text-2xl font-bold text-slate-800 mb-2">準備完了</h2>
-                            <p class="text-slate-600 mb-4">${state.mirrorQuestions.length}問の質問に20秒で答える練習を開始します</p>
+                            <p class="text-slate-600 mb-4">${state.mirrorQuestions.length}問の質問に${state.countdownTimerDuration}秒で答える練習を開始します</p>
                             <p class="text-sm text-slate-500">${state.mirrorQuestionMode === 'random' ? '質問はランダムに選ばれました' : '選択した質問で練習します'}</p>
                         </div>
                         <div class="flex gap-3 justify-center">
@@ -2634,7 +2664,20 @@ function renderMirrorMode() {
                                     ${state.mirrorReviewData.aiAnswerLoading ? ICONS.Loader2 : ICONS.Sparkles} 
                                     ${state.mirrorReviewData.aiAnswerLoading ? '生成中...' : 'AIで回答を作成する'}
                                 </button>
-                                ${existingAnswer ? `
+                                ${state.mirrorReviewData.generatedAnswer ? `
+                                    <div class="mt-4 neo-card-inset p-4 rounded-lg">
+                                        <div class="flex items-center justify-between mb-2">
+                                            <div class="text-xs font-bold text-slate-500 flex items-center gap-2">
+                                                ${ICONS.Sparkles} AIで生成された回答
+                                            </div>
+                                            <button onclick="editGeneratedAnswer()" class="neo-btn px-3 py-1 text-xs font-bold text-purple-700 cursor-pointer flex items-center gap-1">
+                                                ${ICONS.Edit} 編集
+                                            </button>
+                                        </div>
+                                        <div class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">${state.mirrorReviewData.generatedAnswer}</div>
+                                    </div>
+                                ` : ''}
+                                ${existingAnswer && !state.mirrorReviewData.generatedAnswer ? `
                                     <div class="mt-4 neo-card-inset p-4 rounded-lg">
                                         <div class="text-xs font-bold text-slate-500 mb-2 flex items-center gap-2">
                                             ${ICONS.BookOpen} 保存済み回答メモ
@@ -2679,13 +2722,25 @@ function renderMirrorMode() {
                         </div>
                         
                         <!-- アクションボタン -->
-                        <div class="flex flex-col sm:flex-row gap-3">
-                            <button onclick="retryMirrorQuestion()" class="flex-1 neo-btn px-6 py-3 font-bold text-slate-700 cursor-pointer flex items-center justify-center gap-2">
-                                ${ICONS.RefreshCw} もう一度挑戦
-                            </button>
-                            <button onclick="nextQuestion()" class="flex-1 neo-btn-primary px-6 py-3 font-bold cursor-pointer flex items-center justify-center gap-2">
-                                ${ICONS.ChevronDown} 次へ進む
-                            </button>
+                        <div class="space-y-3">
+                            <div class="flex flex-col sm:flex-row gap-3">
+                                ${state.currentQuestionIndex > 0 ? `
+                                    <button onclick="prevQuestion()" class="flex-1 neo-btn px-6 py-3 font-bold text-slate-700 cursor-pointer flex items-center justify-center gap-2">
+                                        ${ICONS.ChevronLeft} 前の質問に戻る
+                                    </button>
+                                ` : ''}
+                                <button onclick="retryMirrorQuestion()" class="flex-1 neo-btn px-6 py-3 font-bold text-slate-700 cursor-pointer flex items-center justify-center gap-2">
+                                    ${ICONS.RefreshCw} もう一度挑戦
+                                </button>
+                                ${state.currentQuestionIndex < state.mirrorQuestions.length - 1 ? `
+                                    <button onclick="skipQuestion()" class="flex-1 neo-btn px-6 py-3 font-bold text-orange-700 cursor-pointer flex items-center justify-center gap-2">
+                                        ${ICONS.ChevronRight} スキップ
+                                    </button>
+                                ` : ''}
+                                <button onclick="nextQuestion()" class="flex-1 neo-btn-primary px-6 py-3 font-bold cursor-pointer flex items-center justify-center gap-2">
+                                    ${ICONS.ChevronDown} 次へ進む
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -2708,7 +2763,7 @@ function renderMirrorMode() {
                         </div>
                         <div class="flex flex-col gap-3">
                             <button onclick="restartMirrorMode()" class="neo-btn-primary w-full py-3 font-bold cursor-pointer">
-                                ${ICONS.RefreshCw} もう一度練習
+                                ${ICONS.RefreshCw} もう一度セットで練習
                             </button>
                             <button onclick="exitMirrorMode()" class="neo-btn w-full py-3 font-bold text-slate-700 cursor-pointer">
                                 メインページに戻る
@@ -2814,6 +2869,7 @@ function renderMirrorSelectionModal() {
     );
     
     const selectedCount = state.mirrorSelectedQuestions.length;
+    const isRandomMode = state.mirrorQuestionMode === 'random';
     
     return `
         <div class="fixed inset-0 z-[90] flex items-center justify-center p-4 modal-overlay animate-fade-in" onclick="closeMirrorSelectionModal()">
@@ -2821,13 +2877,13 @@ function renderMirrorSelectionModal() {
                 <div class="neo-modal-header p-6 flex justify-between items-center shrink-0">
                     <div>
                         <h3 class="text-xl font-bold text-slate-800 flex items-center gap-2">
-                            ${ICONS.Target} 質問を選択
+                            ${ICONS.Target} ${isRandomMode ? 'タイマー設定' : '質問を選択'}
                         </h3>
-                        <p class="text-sm text-slate-600 mt-1">練習したい質問を選択してください（${selectedCount}問選択中）</p>
+                        <p class="text-sm text-slate-600 mt-1">${isRandomMode ? '回答時間を設定してください' : `練習したい質問を選択してください（${selectedCount}問選択中）`}</p>
                     </div>
                     <button onclick="closeMirrorSelectionModal()" class="neo-btn neo-close p-2 rounded-full">${ICONS.X}</button>
                 </div>
-                <div class="flex-1 overflow-y-auto custom-scrollbar p-6">
+                ${!isRandomMode ? `<div class="flex-1 overflow-y-auto custom-scrollbar p-6">
                     <div class="space-y-4">
                         ${state.categories.map(cat => `
                             <div class="mb-6">
@@ -2873,18 +2929,37 @@ function renderMirrorSelectionModal() {
                             </div>
                         `).join('')}
                     </div>
-                </div>
-                <div class="p-6 neo-card-inset flex justify-between items-center shrink-0">
-                    <div class="text-sm text-slate-600">
-                        <span class="font-bold">${selectedCount}問</span> 選択中
+                </div>` : ''}
+                <div class="p-6 neo-card-inset space-y-4 shrink-0">
+                    <div class="pb-4 border-b border-slate-200">
+                        <label class="block text-sm font-bold text-slate-700 mb-3">回答時間の設定</label>
+                        <div class="flex items-center gap-3">
+                            <select id="mirror-timer-duration" onchange="updateMirrorTimerDuration(this.value)" class="neo-card-inset p-2 rounded-lg text-sm font-bold cursor-pointer">
+                                ${[20, 30, 40, 50, 60].map(sec => `
+                                    <option value="${sec}" ${state.countdownTimerDuration === sec ? 'selected' : ''}>${sec}秒</option>
+                                `).join('')}
+                            </select>
+                            <span class="text-sm text-slate-600">で回答します</span>
+                        </div>
                     </div>
-                    <div class="flex gap-3">
-                        <button onclick="closeMirrorSelectionModal()" class="neo-btn px-6 py-3 font-bold text-slate-700 cursor-pointer">
-                            キャンセル
-                        </button>
-                        <button onclick="startManualMirrorMode()" ${selectedCount === 0 ? 'disabled' : ''} class="neo-btn-primary px-8 py-3 font-bold cursor-pointer ${selectedCount === 0 ? 'opacity-50 cursor-not-allowed' : ''}">
-                            ${ICONS.Play} 開始 (${selectedCount}問)
-                        </button>
+                    <div class="flex justify-between items-center">
+                        ${!isRandomMode ? `<div class="text-sm text-slate-600">
+                            <span class="font-bold">${selectedCount}問</span> 選択中
+                        </div>` : '<div></div>'}
+                        <div class="flex gap-3">
+                            <button onclick="closeMirrorSelectionModal()" class="neo-btn px-6 py-3 font-bold text-slate-700 cursor-pointer">
+                                キャンセル
+                            </button>
+                            ${isRandomMode ? `
+                                <button onclick="startRandomMirrorMode()" class="neo-btn-primary px-8 py-3 font-bold cursor-pointer">
+                                    ${ICONS.Play} 開始
+                                </button>
+                            ` : `
+                                <button onclick="startManualMirrorMode()" ${selectedCount === 0 ? 'disabled' : ''} class="neo-btn-primary px-8 py-3 font-bold cursor-pointer ${selectedCount === 0 ? 'opacity-50 cursor-not-allowed' : ''}">
+                                    ${ICONS.Play} 開始 (${selectedCount}問)
+                                </button>
+                            `}
+                        </div>
                     </div>
                 </div>
             </div>
