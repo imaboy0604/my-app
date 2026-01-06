@@ -2416,11 +2416,7 @@ function nextQuestion() {
         state.currentQuestionIndex++;
         state.mirrorPhase = 'question';
         renderApp();
-        // 質問を音声で読み上げ
-        const currentQuestion = state.mirrorQuestions[state.currentQuestionIndex];
-        if (currentQuestion) {
-            setTimeout(() => speakQuestion(currentQuestion.q), 300);
-        }
+        // 質問の自動読み上げは削除（回答開始ボタン押下時のみ読み上げる）
     } else {
         // 全問終了
         // 読み上げを停止
@@ -2439,11 +2435,7 @@ window.prevQuestion = () => {
         state.currentQuestionIndex--;
         state.mirrorPhase = 'question';
         renderApp();
-        // 質問を音声で読み上げ
-        const currentQuestion = state.mirrorQuestions[state.currentQuestionIndex];
-        if (currentQuestion) {
-            setTimeout(() => speakQuestion(currentQuestion.q), 300);
-        }
+        // 質問の自動読み上げは削除（回答開始ボタン押下時のみ読み上げる）
     }
 };
 
@@ -2454,11 +2446,7 @@ window.skipQuestion = () => {
         state.currentQuestionIndex++;
         state.mirrorPhase = 'question';
         renderApp();
-        // 質問を音声で読み上げ
-        const currentQuestion = state.mirrorQuestions[state.currentQuestionIndex];
-        if (currentQuestion) {
-            setTimeout(() => speakQuestion(currentQuestion.q), 300);
-        }
+        // 質問の自動読み上げは削除（回答開始ボタン押下時のみ読み上げる）
     }
 };
 
@@ -2479,8 +2467,8 @@ window.editGeneratedAnswer = () => {
     renderApp();
 };
 
-// 質問を音声で読み上げる
-function speakQuestion(questionText) {
+// 質問を音声で読み上げる（コールバック付き）
+function speakQuestion(questionText, onEndCallback) {
     if ('speechSynthesis' in window) {
         // 既存の読み上げを停止
         window.speechSynthesis.cancel();
@@ -2490,6 +2478,11 @@ function speakQuestion(questionText) {
         utterance.rate = 0.9; // 読み上げ速度（少し遅め）
         utterance.pitch = 1.0;
         utterance.volume = 1.0;
+        
+        // 読み上げ完了時のコールバック
+        if (onEndCallback) {
+            utterance.onend = onEndCallback;
+        }
         
         // 日本語音声を優先的に選択（音声リストが読み込まれるまで待つ）
         const setJapaneseVoice = () => {
@@ -2510,6 +2503,11 @@ function speakQuestion(questionText) {
                 setJapaneseVoice();
             };
         }
+    } else {
+        // 音声合成APIが利用できない場合は即座にコールバックを実行
+        if (onEndCallback) {
+            onEndCallback();
+        }
     }
 }
 
@@ -2518,16 +2516,17 @@ window.startAnswer = () => {
     state.mirrorPhase = 'question';
     renderApp();
     
-    // 質問を音声で読み上げ（タイマー開始前に）
+    // 質問を音声で読み上げ（読み上げ完了後にタイマーを開始）
     const currentQuestion = state.mirrorQuestions[state.currentQuestionIndex];
     if (currentQuestion) {
-        speakQuestion(currentQuestion.q);
-    }
-    
-    // 少し遅延してからタイマー開始（UI更新と音声読み上げを待つ）
-    setTimeout(() => {
+        speakQuestion(currentQuestion.q, () => {
+            // 読み上げ完了後にタイマーを開始
+            startCountdown();
+        });
+    } else {
+        // 質問がない場合は即座にタイマーを開始
         startCountdown();
-    }, 500);
+    }
 };
 
 // カンペ機能: 長押し検知
@@ -2868,6 +2867,21 @@ function renderMirrorMode() {
                 
                 <!-- コンテンツエリア（中央配置、画面内に収まるように） -->
                 <div class="mirror-content-area w-full max-w-3xl flex flex-col items-center justify-center flex-1 min-h-0">
+                    <!-- 面接官画像（回答中のみ表示） -->
+                    ${state.countdownActive ? `
+                        <div class="mirror-interviewer-image mb-4 flex-shrink-0 animate-fade-in">
+                            <div class="neo-card-inset p-3 rounded-xl inline-block">
+                                <img 
+                                    src="https://images.unsplash.com/photo-1560250097-0b93528c311a?w=200&h=200&fit=crop&crop=face&auto=format&q=80" 
+                                    alt="面接官" 
+                                    class="w-24 h-24 sm:w-32 sm:h-32 rounded-lg object-cover shadow-lg border-2 border-slate-300"
+                                    style="filter: brightness(0.75) contrast(1.2) grayscale(0.1);"
+                                    onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%27150%27 height=%27150%27%3E%3Crect fill=%27%234a5568%27 width=%27150%27 height=%27150%27/%3E%3Ctext x=%2750%25%27 y=%2750%25%27 text-anchor=%27middle%27 dy=%27.3em%27 fill=%27white%27 font-size=%2720%27 font-weight=%27bold%27%3E面接官%3C/text%3E%3C/svg%3E';"
+                                />
+                            </div>
+                        </div>
+                    ` : ''}
+                    
                     <!-- 質問カード -->
                     <div class="mirror-question-card neo-card w-full p-6 sm:p-8 mb-4 sm:mb-6 animate-fade-in flex-shrink-0">
                         <div class="flex items-center justify-between mb-4">
